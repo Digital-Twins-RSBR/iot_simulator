@@ -95,3 +95,24 @@ Utilize a interface administrativa do Django para:
     Para adicionar novos tipos, crie um novo handler em devices/rpc_handlers.py implementando os métodos RPC desejados e adicione-o ao RPC_HANDLER_REGISTRY.
     - Endpoints Adicionais:
     É possível estender a API com novos endpoints para, por exemplo, receber comandos adicionais, configurar intervalos de telemetria ou integrar outras funcionalidades.
+
+
+### Como funciona o processo telemetria e sincronização das propriedades:
+
+#### Conexão e Subscrição para RPC:
+- Cada instância de TelemetryPublisher cria um cliente MQTT usando o token do dispositivo e registra os callbacks on_connect e on_message.
+    No on_connect, o cliente se inscreve no tópico v1/devices/me/rpc/request/+ para receber as chamadas RPC enviadas pelo ThingsBoard.
+    O on_message processa a mensagem recebida, diferenciando o comportamento para dispositivos do tipo led (por exemplo, processando o método "switchLed" ou "checkStatus") e dht22 (processando "checkStatus").
+
+#### Envio de Telemetria:
+    - O método send_telemetry() recarrega o dispositivo do banco de dados (para refletir alterações feitas via Django Admin), simula eventuais variações (no caso do sensor DHT22) e envia o payload via MQTT.
+
+    - Loop de Sincronização a Cada 5 Segundos:
+    No comando, o loop principal percorre todos os dispositivos e chama send_telemetry() a cada 5 segundos. Assim, além de enviar os dados de telemetria, o dispositivo permanece “escutando” as mensagens RPC e respondendo-as conforme necessário.
+
+Ao executar o comando:
+    ´´´bash
+    python manage.py send_telemetry
+    ´´´
+cada dispositivo será conectado ao ThingsBoard, enviará telemetria periodicamente e ficará aguardando (e processando) chamadas RPC que possam alterar seu estado ou solicitar informações.
+Essa abordagem garante que tanto as atualizações feitas via Admin quanto as chamadas do ThingsBoard sejam refletidas e sincronizadas em tempo real.
