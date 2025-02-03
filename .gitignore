@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.eggs/
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+.env
+*.env
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+media
+
+# IDEs e editores
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
