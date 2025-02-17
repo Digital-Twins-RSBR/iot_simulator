@@ -11,53 +11,53 @@ MQTT_PORT = 1883
 
 class TelemetryPublisher:
     """
-    Representa um dispositivo que se conecta via MQTT ao ThingsBoard, envia
-    telemetria periodicamente e processa as chamadas RPC.
+    Represents a device that connects via MQTT to ThingsBoard, sends
+    telemetry periodically, and processes RPC calls.
     """
     def __init__(self, device):
-        self.device_pk = device.pk  # Armazena a PK para recarregar o device
+        self.device_pk = device.pk  # Stores the PK to reload the device
         self.token = device.token
         self.client = mqtt.Client(client_id=self.token)
         self.client.username_pw_set(self.token)
-        # Registra callbacks para conexão e mensagens (RPC)
+        # Registers callbacks for connection and messages (RPC)
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.client.connect(THINGSBOARD_HOST, MQTT_PORT, 60)
-        self.client.loop_start()  # Inicia o loop MQTT em background
+        self.client.loop_start()  # Starts the MQTT loop in the background
     
     def on_connect(self, client, userdata, flags, rc):
-        print(f"Device {self.token}: Conectado com o código {rc}")
-        # Inscreve-se para receber chamadas RPC
+        print(f"Device {self.token}: Connected with code {rc}")
+        # Subscribes to receive RPC calls
         client.subscribe("v1/devices/me/rpc/request/+")
     
     def on_message(self, client, userdata, msg):
-        print(f"Device {self.token}: Mensagem recebida no tópico {msg.topic}: {msg.payload.decode()}")
+        print(f"Device {self.token}: Message received on topic {msg.topic}: {msg.payload.decode()}")
         try:
             payload = json.loads(msg.payload.decode())
             method = payload.get("method")
             params = payload.get("params")
             
-            # Recarrega o device do banco para obter o estado atualizado
+            # Reloads the device from the database to get the updated state
             device = Device.objects.get(pk=self.device_pk)
             device.refresh_from_db()
             device_type = device.device_type.name.lower()
             if device_type == "lightbulb":
                 if method == "switchLed":
-                    # Atualiza o estado do LED conforme o comando RPC recebido
+                    # Updates the LED state according to the received RPC command
                     new_status = bool(params)
                     device.state = {"status": new_status}
                     device.save()
                     telemetry = json.dumps({"status": new_status})
                     client.publish("v1/devices/me/telemetry", telemetry)
-                    print(f"Device {device.device_id}: LED atualizado para {new_status} via RPC")
+                    print(f"Device {device.device_id}: LED updated to {new_status} via RPC")
                 elif method == "checkStatus":
                     telemetry = json.dumps(device.state)
                     response_topic = msg.topic.replace("request", "response")
                     client.publish(response_topic, telemetry)
-                    print(f"Device {device.device_id}: Enviado checkStatus via RPC")
+                    print(f"Device {device.device_id}: Sent checkStatus via RPC")
             elif device_type == "temperature sensor":
                 if method == "checkStatus":
-                    # Simula variação dos valores do sensor
+                    # Simulates variation in sensor values
                     current_state = device.state or {}
                     temperature = current_state.get("temperature", 25.0)
                     humidity = current_state.get("humidity", 50.0)
@@ -71,27 +71,27 @@ class TelemetryPublisher:
                     telemetry = json.dumps(new_state)
                     response_topic = msg.topic.replace("request", "response")
                     client.publish(response_topic, telemetry)
-                    print(f"Device {device.device_id}: Enviado DHT22 checkStatus via RPC")
+                    print(f"Device {device.device_id}: Sent DHT22 checkStatus via RPC")
             else:
-                print(f"Device {device.device_id}: Tipo de dispositivo não suportado para RPC.")
+                print(f"Device {device.device_id}: Unsupported device type for RPC.")
         except Exception as e:
-            print(f"Device {self.token}: Erro ao processar mensagem RPC: {e}")
+            print(f"Device {self.token}: Error processing RPC message: {e}")
     
     def publish(self, payload):
         self.client.publish("v1/devices/me/telemetry", payload)
     
     def send_telemetry(self):
-        # Recarrega o device atualizado do banco
+        # Reloads the updated device from the database
         device = Device.objects.get(pk=self.device_pk)
         device.refresh_from_db()
         device_type = device.device_type.name.lower()
         
         if device_type == "led":
-            # Para LED, publica o estado salvo sem simulação
-            # (assim, se via Admin ou RPC o estado foi alterado, esse valor será mantido)
+            # For LED, publishes the saved state without simulation
+            # (thus, if the state was changed via Admin or RPC, this value will be maintained)
             telemetry = json.dumps({"status": device.state.get("status", False)})
         elif device_type == "dht22":
-            # Para DHT22, simula pequenas variações nos valores
+            # For DHT22, simulates small variations in values
             current_state = device.state or {}
             temperature = current_state.get("temperature", 25.0)
             humidity = current_state.get("humidity", 50.0)
@@ -107,27 +107,27 @@ class TelemetryPublisher:
             telemetry = json.dumps(device.state)
         
         self.publish(telemetry)
-        print(f"Device {device.device_id}: Telemetria enviada: {telemetry}")
+        print(f"Device {device.device_id}: Telemetry sent: {telemetry}")
 
 class Command(BaseCommand):
-    help = "Envia telemetria e processa chamadas RPC do ThingsBoard a cada 5 segundos para os dispositivos cadastrados."
+    help = "Sends telemetry and processes RPC calls from ThingsBoard every 5 seconds for registered devices."
 
     def handle(self, *args, **options):
         all_devices = Device.objects.all()
         if not all_devices:
-            self.stdout.write("Nenhum dispositivo cadastrado.")
+            self.stdout.write("No devices registered.")
             return
         
-        # Cria um TelemetryPublisher para cada dispositivo
+        # Creates a TelemetryPublisher for each device
         publishers = {}
         for device in all_devices:
             publishers[device.device_id] = TelemetryPublisher(device)
         
-        self.stdout.write("Iniciando envio de telemetria (a cada 5 segundos) e aguardando RPCs...")
+        self.stdout.write("Starting telemetry sending (every 5 seconds) and waiting for RPCs...")
         try:
             while True:
                 for device_id, publisher in publishers.items():
                     publisher.send_telemetry()
                 time.sleep(5)
         except KeyboardInterrupt:
-            self.stdout.write("Encerrando envio de telemetria e processamento de RPCs.")
+            self.stdout.write("Stopping telemetry sending and RPC processing.")
