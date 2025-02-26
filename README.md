@@ -116,3 +116,9 @@ When running the command:
     ```
 each device will be connected to ThingsBoard, periodically send telemetry, and wait (and process) RPC calls that may change its state or request information.
 This approach ensures that both updates made via Admin and calls from ThingsBoard are reflected and synchronized in real-time.
+
+When running the command:
+```bash
+python manage.py send_telemetry --device-id device1 device2 --use-influxdb --randomize
+```
+You can specify the devices identifiers and if you want use a influxdb to store all the sended values and the parameter randomize to make randomized values from devices

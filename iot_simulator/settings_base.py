@@ -125,3 +125,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 SESSION_COOKIE_NAME = 'sessionid_iot_simulator'
 CSRF_COOKIE_NAME = 'csrftoken_iot_simulator'
+
+INFLUXDB_HOST = 'localhost'
+INFLUXDB_PORT = 8086
+INFLUXDB_BUCKET = 'iot_data'
+INFLUXDB_ORGANIZATION = 'middts'
+INFLUXDB_TOKEN = '8owRaCeDq0lIia48TmTYY5Pmiap-P4q2LcEJvNy86cw3SFXMgobRWvE3yNb8Icm0smOFkvp2ueDBIPnQlZ9w9g=='
