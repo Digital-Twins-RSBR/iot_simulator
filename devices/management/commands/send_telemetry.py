@@ -207,7 +207,6 @@ class Command(BaseCommand):
                         headers = {
                             "Authorization": f"Token {INFLUXDB_TOKEN}",
                             "Content-Type": "text/plain",
-                            "Accept": "application/json"
                         }
                         device = Device.objects.filter(device_id=device_token).first()
                         if device:
