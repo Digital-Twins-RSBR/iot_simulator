@@ -3,6 +3,97 @@ from django.conf import settings
 import requests
 import json
 
+DEVICE_RPC_METADATA = {
+    "led": {
+        "properties": {
+            "status": {
+                "rpc_read_method": "checkStatus",
+                "rpc_write_method": "switchLed",
+                "type": "Boolean"
+            }
+        }
+    },
+    "lightbulb": {
+        "properties": {
+            "status": {
+                "rpc_read_method": "checkStatus",
+                "rpc_write_method": "switchLed",
+                "type": "Boolean"
+            }
+        }
+    },
+    "temperature sensor": {
+        "properties": {
+            "temperature": {
+                "rpc_read_method": "checkStatus",
+                "type": "Double"
+            }
+        }
+    },
+    "soilhumidity sensor": {
+        "properties": {
+            "humidity": {
+                "rpc_read_method": "checkStatus",
+                "type": "Double"
+            }
+        }
+    },
+    "gas sensor": {
+        "properties": {
+            # Adicione propriedades se necessário
+        }
+    },
+    "airconditioner": {
+        "properties": {
+            "temperature": {
+                "rpc_read_method": "checkStatus",
+                "type": "Double"
+            },
+            "humidity": {
+                "rpc_read_method": "checkStatus",
+                "type": "Double"
+            },
+            "status": {
+                "rpc_read_method": "checkStatus",
+                "rpc_write_method": "switchStatus",
+                "type": "Boolean"
+            }
+        }
+    },
+    "pump": {
+        "properties": {
+            "status": {
+                "rpc_read_method": "checkStatus",
+                "rpc_write_method": "switchPump",
+                "type": "Boolean"
+            }
+        }
+    },
+    "pool": {
+        "properties": {
+            "status": {
+                "rpc_read_method": "checkStatus",
+                "rpc_write_method": "switchPool",
+                "type": "Boolean"
+            }
+        }
+    },
+    "garden": {
+        "properties": {
+            # Adicione propriedades se necessário
+        }
+    },
+    "irrigation": {
+        "properties": {
+            "status": {
+                "rpc_read_method": "checkStatus",
+                "rpc_write_method": "switchIrrigation",
+                "type": "Boolean"
+            }
+        }
+    }
+}
+
 class DeviceType(models.Model):
     name = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True, null=True)
@@ -39,6 +130,10 @@ class Device(models.Model):
 
     def __str__(self):
         return self.device_id
+
+    def get_rpc_metadata(self):
+        device_type_name = self.device_type.name.lower()
+        return DEVICE_RPC_METADATA.get(device_type_name, {})
 
     def save(self, *args, **kwargs):
         is_new = self.pk is None
@@ -161,3 +256,36 @@ class Device(models.Model):
                     print(f"Erro ao atualizar etiqueta: {resp.status_code} - {resp.text}")
             except Exception as e:
                 print(f"Erro ao atualizar etiqueta do device no ThingsBoard: {e}")
+        # Após atualizar o label, envie os atributos compartilhados/client-side
+        if self.thingsboard_id:
+            rpc_metadata = self.get_rpc_metadata()
+            if rpc_metadata:
+                try:
+                    THINGSBOARD_HOST = settings.THINGSBOARD_HOST.rstrip('/')
+                    THINGSBOARD_API_URL = f"{THINGSBOARD_HOST}/api"
+                    TB_USER = getattr(settings, "THINGSBOARD_USER", None)
+                    TB_PASSWORD = getattr(settings, "THINGSBOARD_PASSWORD", None)
+                    # Autentica e obtém JWT
+                    resp = requests.post(
+                        f"{THINGSBOARD_API_URL}/auth/login",
+                        json={"username": TB_USER, "password": TB_PASSWORD},
+                        headers={"Content-Type": "application/json"}
+                    )
+                    resp.raise_for_status()
+                    jwt_token = resp.json().get("token")
+                    headers = {
+                        "Content-Type": "application/json",
+                        "X-Authorization": f"Bearer {jwt_token}"
+                    }
+                    # Envia como atributo compartilhado (shared)
+                    url_shared = f"{THINGSBOARD_API_URL}/plugins/telemetry/DEVICE/{self.thingsboard_id}/SHARED_SCOPE"
+                    resp = requests.post(url_shared, headers=headers, json=rpc_metadata)
+                    if resp.status_code in (200, 201):
+                        print(f"Metadados RPC enviados como atributo compartilhado para o device {self.device_id}.")
+                    else:
+                        print(f"Erro ao enviar metadados RPC (shared): {resp.status_code} - {resp.text}")
+                    # Se quiser enviar como client-side attribute, troque SHARED_SCOPE por CLIENT_SCOPE
+                    # url_client = f"{THINGSBOARD_API_URL}/plugins/telemetry/DEVICE/{self.thingsboard_id}/CLIENT_SCOPE"
+                    # requests.post(url_client, headers=headers, json=rpc_metadata)
+                except Exception as e:
+                    print(f"Erro ao enviar metadados RPC para o ThingsBoard: {e}")

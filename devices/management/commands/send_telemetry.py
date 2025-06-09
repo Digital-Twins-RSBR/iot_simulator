@@ -9,6 +9,11 @@ from devices.models import Device
 import paho.mqtt.client as mqtt
 
 THINGSBOARD_HOST = settings.THINGSBOARD_HOST
+if THINGSBOARD_HOST.startswith("http://"):
+    THINGSBOARD_HOST = THINGSBOARD_HOST[len("http://"):]
+elif THINGSBOARD_HOST.startswith("https://"):
+    THINGSBOARD_HOST = THINGSBOARD_HOST[len("https://"):]
+
 THINGSBOARD_API_URL = f"https://{THINGSBOARD_HOST}/api"
 THINGSBOARD_MQTT_PORT = settings.THINGSBOARD_MQTT_PORT
 THINGSBOARD_MQTT_KEEP_ALIVE = settings.THINGSBOARD_MQTT_KEEP_ALIVE
@@ -29,7 +34,7 @@ class TelemetryPublisher:
     """
     LIGHTS = ["led", "lightbulb"]
     TEMPERATURE_SENSOR = ["temperature sensor"]
-    SOILHUMIDITY_SENSOR = ["soilhumidity sensor"]
+    SOILHUMIDITY_SENSOR = ["soilhumidity sensor", "soil humidity sensor"]
     GAS_SENSOR = ["gas sensor"]
     AIR_CONDITIONER = ["airconditioner"]
     PUMP = ["pump"]
@@ -342,12 +347,13 @@ class Command(BaseCommand):
                         if device:
                             sensor_name_lower = device.device_type.name.lower()
                             if sensor_name_lower in ["temperature sensor", "dht22", "airconditioner"]:
+                                status = device.state.get("status", False)
                                 temperature = round(random.uniform(20, 30), 2)
                                 humidity = round(random.uniform(40, 60), 2)
-                                device.state = {"temperature": temperature, "humidity": humidity}
+                                device.state = {"status": status, "temperature": temperature, "humidity": humidity}
                                 device.save()
                                 timestamp = int(time.time() * 1000)  # Timestamp in ms
-                                data = f"device_data,sensor={device.device_id},source=simulator temperature={temperature},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
+                                data = f"device_data,sensor={device.device_id},source=simulator status={int(status)},temperature={temperature},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
                                 response = requests.post(INFLUXDB_URL, headers=headers, data=data)
                                 print(f"Response Code: {response.status_code}, Response Text: {response.text}")
                                 if response.status_code != 204:
@@ -364,10 +370,63 @@ class Command(BaseCommand):
                                 if response.status_code != 204:
                                     print(f"Error sending data to InfluxDB: {response.status_code} - {response.text}")
                                     continue  # Skip sending telemetry if InfluxDB registration fails
+                            elif sensor_name_lower in ["soilhumidity sensor", "soil humidity sensor"]:
+                                status = device.state.get("status", False)
+                                humidity = round(random.uniform(30, 70), 2)
+                                device.state = {"status": status, "humidity": humidity}
+                                device.save()
+                                timestamp = int(time.time() * 1000)
+                                data = f"device_data,sensor={device.device_id},source=simulator status={int(status)},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
+                                response = requests.post(INFLUXDB_URL, headers=headers, data=data)
+                                print(f"Response Code: {response.status_code}, Response Text: {response.text}")
+                                if response.status_code != 204:
+                                    print(f"Error sending data to InfluxDB: {response.status_code} - {response.text}")
+                                    continue
+                            elif sensor_name_lower in ["pump"]:
+                                status = device.state.get("status", False)
+                                device.state = {"status": status}
+                                device.save()
+                                timestamp = int(time.time() * 1000)
+                                data = f"device_data,sensor={device.device_id},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                                response = requests.post(INFLUXDB_URL, headers=headers, data=data)
+                                print(f"Response Code: {response.status_code}, Response Text: {response.text}")
+                                if response.status_code != 204:
+                                    print(f"Error sending data to InfluxDB: {response.status_code} - {response.text}")
+                                    continue
+                            elif sensor_name_lower in ["pool"]:
+                                status = device.state.get("status", False)
+                                device.state = {"status": status}
+                                device.save()
+                                timestamp = int(time.time() * 1000)
+                                data = f"device_data,sensor={device.device_id},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                                response = requests.post(INFLUXDB_URL, headers=headers, data=data)
+                                print(f"Response Code: {response.status_code}, Response Text: {response.text}")
+                                if response.status_code != 204:
+                                    print(f"Error sending data to InfluxDB: {response.status_code} - {response.text}")
+                                    continue
+                            elif sensor_name_lower in ["irrigation"]:
+                                status = device.state.get("status", False)
+                                device.state = {"status": status}
+                                device.save()
+                                timestamp = int(time.time() * 1000)
+                                data = f"device_data,sensor={device.device_id},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                                response = requests.post(INFLUXDB_URL, headers=headers, data=data)
+                                print(f"Response Code: {response.status_code}, Response Text: {response.text}")
+                                if response.status_code != 204:
+                                    print(f"Error sending data to InfluxDB: {response.status_code} - {response.text}")
+                                    continue
                             else:
-                                # Handle other device types if necessary
-                                pass
-
+                                status = device.state.get("status", False)
+                                device.state = {"status": status}
+                                device.save()
+                                timestamp = int(time.time() * 1000)
+                                data = f"device_data,sensor={device.device_id},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                                response = requests.post(INFLUXDB_URL, headers=headers, data=data)
+                                print(f"Response Code: {response.status_code}, Response Text: {response.text}")
+                                if response.status_code != 204:
+                                    print(f"Error sending data to InfluxDB: {response.status_code} - {response.text}")
+                                    continue
+                                
                     publisher.send_telemetry()
                 time.sleep(HEARTBEAT_INTERVAL) # heartbeat every 2 seconds
         except KeyboardInterrupt:
