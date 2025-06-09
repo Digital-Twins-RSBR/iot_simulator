@@ -1,6 +1,6 @@
-# IOT Simulator
+# Simulador IoT
 
-O **IOT Simulator** é uma ferramenta desenvolvida em Django para simular dispositivos IoT que se comunicam com o ThingsBoard. Com ela, é possível cadastrar dispositivos (por meio do Django Admin) e, a partir disso, enviar periodicamente dados de telemetria para o ThingsBoard via MQTT – simulando o comportamento de dispositivos físicos (como LEDs e sensores DHT22). A ferramenta também oferece uma interface para processar chamadas RPC (Remote Procedure Call) e atualizar o estado dos dispositivos, facilitando a integração com soluções de digital twin e middleware de IoT.
+O **Simulador IoT** é uma ferramenta desenvolvida em Django para simular dispositivos IoT que se comunicam com o ThingsBoard. Com ela, é possível cadastrar dispositivos (por meio do Django Admin) e, a partir disso, enviar periodicamente dados de telemetria para o ThingsBoard via MQTT – simulando o comportamento de dispositivos físicos (como LEDs e sensores DHT22). A ferramenta também oferece uma interface para processar chamadas RPC (Remote Procedure Call) e atualizar o estado dos dispositivos, facilitando a integração com soluções de digital twin e middleware de IoT.
 
 ## Componentes do Projeto
 
@@ -116,3 +116,8 @@ Ao executar o comando:
     ´´´
 cada dispositivo será conectado ao ThingsBoard, enviará telemetria periodicamente e ficará aguardando (e processando) chamadas RPC que possam alterar seu estado ou solicitar informações.
 Essa abordagem garante que tanto as atualizações feitas via Admin quanto as chamadas do ThingsBoard sejam refletidas e sincronizadas em tempo real.
+
+## Mudanças Recentes
+
+- **Importação de Dispositivos via JSON**: Adicionado um comando para importar definições de dispositivos diretamente de um arquivo JSON, facilitando a inclusão de múltiplos dispositivos.
+- **Modelos System e Unit**: Novos modelos chamados `System` e `Unit` foram criados para melhorar a organização do código e a separação de responsabilidades. Agora, dispositivos são agrupados em Unidades, e Unidades são agrupadas em Sistemas.

@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 import os
 from pathlib import Path
 
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -131,3 +132,11 @@ INFLUXDB_PORT = 8086
 INFLUXDB_BUCKET = 'iot_data'
 INFLUXDB_ORGANIZATION = 'middts'
 INFLUXDB_TOKEN = 'xxx'
+THINGSBOARD_HOST = "https://demo.thingsboard.io"
+THINGSBOARD_USER = "xxx"
+THINGSBOARD_PASSWORD = "xxx"
+THINGSBOARD_MQTT_PORT = 1883
+THINGSBOARD_MQTT_KEEP_ALIVE = 60
+HEARTBEAT_INTERVAL = 5
+
+ALLOW_THINGSBOARD_DELETE = True

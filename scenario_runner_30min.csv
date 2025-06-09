@@ -1,0 +1,12 @@
+start,end,status,stage
+00:00,04:59,up,Baseline stable
+05:00,05:20,down,Downtime 1
+05:21,09:59,up,Recovery 1
+10:00,10:35,down,Downtime 2
+10:36,14:59,up,Recovery 2
+15:00,15:10,down,Downtime 3
+15:11,19:59,up,Recovery 3
+20:00,20:45,down,Downtime 4
+20:46,24:59,up,Recovery 4
+25:00,25:30,down,Downtime 5
+25:31,29:59,up,Recovery 5

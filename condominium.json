@@ -1,0 +1,35 @@
+{
+  "template_name": "Smart Home",
+  "devices": [
+    {
+      "device_type": "Pump",
+      "base_name": "Pump",
+      "state": {"status": false}
+    },
+    {
+      "device_type": "Irrigation",
+      "base_name": "Irrigation",
+      "state": {"status": false}
+    },
+    {
+      "device_type": "Soil Humidity Sensor",
+      "base_name": "SoilHumiditySensor",
+      "state": {"humidity": 50.0}
+    },
+    {
+      "device_type": "AirConditioner",
+      "base_name": "AirConditioner1",
+      "state": {"temperature": 24.0, "status": false}
+    },
+    {
+      "device_type": "AirConditioner",
+      "base_name": "AirConditioner2",
+      "state": {"temperature": 24.0, "status": false}
+    },
+    {
+      "device_type": "LightBulb",
+      "base_name": "LightBulb",
+      "state": {"status": false}
+    }
+  ]
+}

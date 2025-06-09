@@ -8,8 +8,12 @@ import requests
 from devices.models import Device
 import paho.mqtt.client as mqtt
 
-THINGSBOARD_HOST = "demo.thingsboard.io"
-MQTT_PORT = 1883
+THINGSBOARD_HOST = settings.THINGSBOARD_HOST
+THINGSBOARD_API_URL = f"https://{THINGSBOARD_HOST}/api"
+THINGSBOARD_MQTT_PORT = settings.THINGSBOARD_MQTT_PORT
+THINGSBOARD_MQTT_KEEP_ALIVE = settings.THINGSBOARD_MQTT_KEEP_ALIVE
+HEARTBEAT_INTERVAL = settings.HEARTBEAT_INTERVAL
+
 # INFLUX configuration
 INFLUXDB_HOST = settings.INFLUXDB_HOST
 INFLUXDB_PORT = settings.INFLUXDB_PORT
@@ -42,7 +46,7 @@ class TelemetryPublisher:
         # Registers callbacks for connection and messages (RPC)
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
-        self.client.connect(THINGSBOARD_HOST, MQTT_PORT, 60)
+        self.client.connect(THINGSBOARD_HOST, THINGSBOARD_MQTT_PORT, THINGSBOARD_MQTT_KEEP_ALIVE)
         self.client.loop_start()  # Starts the MQTT loop in the background
     
     def on_connect(self, client, userdata, flags, rc):
@@ -70,7 +74,7 @@ class TelemetryPublisher:
                 "Content-Type": "text/plain"
             }
             
-            if device_type in self.LIGHTS:
+            if device_type in self.LIGHTS or device_type == "lightbulb":
                 if method == "switchLed":
                     # Atualiza o estado do LED com o comando recebido via RPC
                     new_status = bool(params)
@@ -95,30 +99,136 @@ class TelemetryPublisher:
                     response_topic = msg.topic.replace("request", "response")
                     client.publish(response_topic, json.dumps({"status": telemetry}))
 
-            elif device_type in self.TEMPERATURE_SENSOR + self.AIR_CONDITIONER:
+            elif device_type in self.TEMPERATURE_SENSOR or device_type == "temperature sensor":
                 if method == "checkStatus":
-                    # Simula variação nos valores do sensor
                     current_state = device.state or {}
                     temperature = current_state.get("temperature", 25.0)
+                    temperature += random.uniform(-0.5, 0.5)
+                    temperature = max(0, temperature)
+                    new_state = {"temperature": temperature}
+                    device.state = new_state
+                    device.save()
+                    telemetry = json.dumps(new_state)
+                    response_topic = msg.topic.replace("request", "response")
+                    client.publish(response_topic, telemetry)
+                    print(f"Device {device.device_id}: Sent Temperature Sensor checkStatus via RPC")
+                    data = f"device_data,sensor={device.device_id},source=simulator temperature={temperature},received_timestamp={received_timestamp} {received_timestamp}"
+                    response = requests.post(INFLUXDB_URL, headers=headers, data=data)
+                    print(f"Response Code: {response.status_code}, Response Text: {response.text}")
+
+            elif device_type in self.SOILHUMIDITY_SENSOR or device_type == "soil humidity sensor":
+                if method == "checkStatus":
+                    current_state = device.state or {}
                     humidity = current_state.get("humidity", 50.0)
+                    humidity += random.uniform(-2, 2)
+                    humidity = max(0, min(100, humidity))
+                    new_state = {"humidity": humidity}
+                    device.state = new_state
+                    device.save()
+                    telemetry = json.dumps(new_state)
+                    response_topic = msg.topic.replace("request", "response")
+                    client.publish(response_topic, telemetry)
+                    print(f"Device {device.device_id}: Sent Soil Humidity Sensor checkStatus via RPC")
+                    data = f"device_data,sensor={device.device_id},source=simulator humidity={humidity},received_timestamp={received_timestamp} {received_timestamp}"
+                    response = requests.post(INFLUXDB_URL, headers=headers, data=data)
+                    print(f"Response Code: {response.status_code}, Response Text: {response.text}")
+
+            elif device_type in self.PUMP or device_type == "pump":
+                if method == "switchPump":
+                    new_status = bool(params)
+                    device.state = {"status": new_status}
+                    device.save()
+                    telemetry = json.dumps({"status": new_status})
+                    client.publish("v1/devices/me/telemetry", telemetry)
+                    print(f"Device {device.device_id}: Pump updated to {new_status} via RPC")
+                    data = f"device_data,sensor={device.device_id},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    response = requests.post(INFLUXDB_URL, headers=headers, data=data)
+                    print(f"Response Code: {response.status_code}, Response Text: {response.text}")
+                    response_topic = msg.topic.replace("request", "response")
+                    client.publish(response_topic, json.dumps({"status": new_status}))
+                if method == "checkStatus":
+                    telemetry = device.state.get("status", False)
+                    response_topic = msg.topic.replace("request", "response")
+                    client.publish(response_topic, json.dumps({"status": telemetry}))
+
+            elif device_type in self.POOL or device_type == "pool":
+                if method == "switchPool":
+                    new_status = bool(params)
+                    device.state = {"status": new_status}
+                    device.save()
+                    telemetry = json.dumps({"status": new_status})
+                    client.publish("v1/devices/me/telemetry", telemetry)
+                    print(f"Device {device.device_id}: Pool updated to {new_status} via RPC")
+                    data = f"device_data,sensor={device.device_id},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    response = requests.post(INFLUXDB_URL, headers=headers, data=data)
+                    print(f"Response Code: {response.status_code}, Response Text: {response.text}")
+                    response_topic = msg.topic.replace("request", "response")
+                    client.publish(response_topic, json.dumps({"status": new_status}))
+                if method == "checkStatus":
+                    telemetry = device.state.get("status", False)
+                    response_topic = msg.topic.replace("request", "response")
+                    client.publish(response_topic, json.dumps({"status": telemetry}))
+
+            elif device_type in self.IRRIGATION or device_type == "irrigation":
+                if method == "switchIrrigation":
+                    new_status = bool(params)
+                    device.state = {"status": new_status}
+                    device.save()
+                    telemetry = json.dumps({"status": new_status})
+                    client.publish("v1/devices/me/telemetry", telemetry)
+                    print(f"Device {device.device_id}: Irrigation updated to {new_status} via RPC")
+                    data = f"device_data,sensor={device.device_id},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    response = requests.post(INFLUXDB_URL, headers=headers, data=data)
+                    print(f"Response Code: {response.status_code}, Response Text: {response.text}")
+                    response_topic = msg.topic.replace("request", "response")
+                    client.publish(response_topic, json.dumps({"status": new_status}))
+                if method == "checkStatus":
+                    telemetry = device.state.get("status", False)
+                    response_topic = msg.topic.replace("request", "response")
+                    client.publish(response_topic, json.dumps({"status": telemetry}))
+
+            elif device_type in self.AIR_CONDITIONER or device_type == "airconditioner":
+                if method == "checkStatus":
+                    current_state = device.state or {}
+                    temperature = current_state.get("temperature", 24.0)
+                    humidity = current_state.get("humidity", 50.0)
+                    status = current_state.get("status", False)
+                    # Simula pequenas variações
                     temperature += random.uniform(-0.5, 0.5)
                     humidity += random.uniform(-1, 1)
                     temperature = max(0, temperature)
                     humidity = max(0, min(100, humidity))
-                    new_state = {"temperature": temperature, "humidity": humidity, "status": current_state.get("status", False)}
+                    new_state = {
+                        "temperature": temperature,
+                        "humidity": humidity,
+                        "status": status
+                    }
                     device.state = new_state
                     device.save()
-
                     telemetry = json.dumps(new_state)
                     response_topic = msg.topic.replace("request", "response")
                     client.publish(response_topic, telemetry)
-                    print(f"Device {device.device_id}: Sent DHT22 checkStatus via RPC")
-
-                    # Envia os dados para o InfluxDB registrando o evento
-                    data = f"device_data,sensor={device.device_id},source=simulator temperature={temperature},humidity={humidity},received_timestamp={received_timestamp} {received_timestamp}"
+                    print(f"Device {device.device_id}: Sent AirConditioner checkStatus via RPC")
+                    data = f"device_data,sensor={device.device_id},source=simulator temperature={temperature},humidity={humidity},status={int(status)},received_timestamp={received_timestamp} {received_timestamp}"
                     response = requests.post(INFLUXDB_URL, headers=headers, data=data)
                     print(f"Response Code: {response.status_code}, Response Text: {response.text}")
-                    
+                if method == "switchStatus":
+                    new_status = bool(params)
+                    current_state = device.state or {}
+                    device.state = {
+                        "temperature": current_state.get("temperature", 24.0),
+                        "humidity": current_state.get("humidity", 50.0),
+                        "status": new_status
+                    }
+                    device.save()
+                    telemetry = json.dumps(device.state)
+                    client.publish("v1/devices/me/telemetry", telemetry)
+                    print(f"Device {device.device_id}: AirConditioner status updated to {new_status} via RPC")
+                    data = f"device_data,sensor={device.device_id},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    response = requests.post(INFLUXDB_URL, headers=headers, data=data)
+                    print(f"Response Code: {response.status_code}, Response Text: {response.text}")
+                    response_topic = msg.topic.replace("request", "response")
+                    client.publish(response_topic, json.dumps({"status": new_status}))
             else:
                 print(f"Device {device.device_id}: Unsupported device type for RPC.")
         except Exception as e:
@@ -147,6 +257,18 @@ class TelemetryPublisher:
                 status = bool(random.getrandbits(1))
                 device.state = {"temperature": temperature, "humidity": humidity, "status": status}
                 telemetry = json.dumps({"temperature": temperature, "humidity": humidity, "status": status})
+            elif device_type in self.PUMP:
+                status = bool(random.getrandbits(1))
+                device.state = {"status": status}
+                telemetry = json.dumps({"status": status})
+            elif device_type in self.POOL:
+                status = bool(random.getrandbits(1))
+                device.state = {"status": status}
+                telemetry = json.dumps({"status": status})
+            elif device_type in self.IRRIGATION:
+                status = bool(random.getrandbits(1))
+                device.state = {"status": status}
+                telemetry = json.dumps({"status": status})
             else:
                 telemetry = json.dumps(device.state)
             device.save()
@@ -179,14 +301,22 @@ class Command(BaseCommand):
             type=str,
             help='Specify one or more device IDs to send telemetry data'
         )
+        parser.add_argument(
+            '--system',
+            type=str,
+            help='Specify a system name to send telemetry only for its devices'
+        )
 
     def handle(self, *args, **options):
         use_influxdb = options['use_influxdb']
         randomize = options['randomize']
         device_ids = options['device_id']
+        system_name = options.get('system')
         
         if device_ids:
             all_devices = Device.objects.filter(id__in=device_ids)
+        elif system_name:
+            all_devices = Device.objects.filter(system__name=system_name)
         else:
             all_devices = Device.objects.all()
         
@@ -239,6 +369,6 @@ class Command(BaseCommand):
                                 pass
 
                     publisher.send_telemetry()
-                time.sleep(5)
+                time.sleep(HEARTBEAT_INTERVAL) # heartbeat every 2 seconds
         except KeyboardInterrupt:
             self.stdout.write("Stopping telemetry sending and RPC processing.")

@@ -2,6 +2,11 @@
 
 The **IOT Simulator** is a tool developed in Django to simulate IoT devices that communicate with ThingsBoard. With it, you can register devices (via Django Admin) and then periodically send telemetry data to ThingsBoard via MQTT – simulating the behavior of physical devices (such as LEDs and DHT22 sensors). The tool also offers an interface to process RPC (Remote Procedure Call) calls and update the state of devices, facilitating integration with digital twin solutions and IoT middleware.
 
+## Recent Changes
+
+- **Import Devices from JSON**: Added a command to import device definitions directly from a JSON file, streamlining the process of adding multiple devices.
+- **System and Unit Models**: Introduced new models named `System` and `Unit` to improve code organization and separation of concerns. Devices are now grouped under Units, and Units are grouped under Systems.
+
 ## Project Components
 
 ### 1. Models
