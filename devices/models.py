@@ -250,10 +250,10 @@ class Device(models.Model):
                 # Atualiza o device via POST em /api/device
                 url_update = f"{THINGSBOARD_API_URL}/device"
                 resp = requests.post(url_update, headers=headers, data=json.dumps(device_data))
-                if resp.status_code in (200, 201):
-                    print(f"Etiqueta (label) atualizada para o device {self.device_id} no ThingsBoard.")
-                else:
-                    print(f"Erro ao atualizar etiqueta: {resp.status_code} - {resp.text}")
+                # if resp.status_code in (200, 201):
+                #     print(f"Etiqueta (label) atualizada para o device {self.device_id} no ThingsBoard.")
+                # else:
+                #     print(f"Erro ao atualizar etiqueta: {resp.status_code} - {resp.text}")
             except Exception as e:
                 print(f"Erro ao atualizar etiqueta do device no ThingsBoard: {e}")
         # Após atualizar o label, envie os atributos compartilhados/client-side
