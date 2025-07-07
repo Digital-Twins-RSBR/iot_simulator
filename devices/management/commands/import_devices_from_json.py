@@ -27,14 +27,14 @@ class Command(BaseCommand):
             unit, _ = Unit.objects.get_or_create(name=unit_name, system=system)
             for dev in template['devices']:
                 device_type, _ = DeviceType.objects.get_or_create(name=dev['device_type'])
-                device_id = f"{dev['base_name']}_{replica}"
+                device_id = f"{template['template_name']} {replica} - {dev['base_name']}"
 
                 # Verifica se o device já existe antes de criar
-                if Device.objects.filter(device_id=device_id).exists():
-                    self.stdout.write(self.style.WARNING(
-                        f"Device '{device_id}' já existe. Pulando criação."
-                    ))
-                    continue
+                # if Device.objects.filter(device_id=device_id).exists():
+                #     self.stdout.write(self.style.WARNING(
+                #         f"Device '{device_id}' já existe. Pulando criação."
+                #     ))
+                #     continue
 
                 Device.objects.create(
                     device_id=device_id,

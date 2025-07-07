@@ -1,34 +1,39 @@
 {
-  "template_name": "Smart Home",
+  "template_name": "House",
   "devices": [
     {
       "device_type": "Pump",
-      "base_name": "Pump",
+      "base_name": "Pool - Pump",
       "state": {"status": false}
     },
     {
       "device_type": "Irrigation",
-      "base_name": "Irrigation",
+      "base_name": "Garden - Irrigation",
       "state": {"status": false}
     },
     {
       "device_type": "Soil Humidity Sensor",
-      "base_name": "SoilHumiditySensor",
+      "base_name": "Garden - SoilHumiditySensor",
       "state": {"humidity": 50.0}
     },
     {
       "device_type": "AirConditioner",
-      "base_name": "AirConditioner1",
+      "base_name": "Room 1 - AirConditioner1",
       "state": {"temperature": 24.0, "status": false}
     },
     {
       "device_type": "AirConditioner",
-      "base_name": "AirConditioner2",
+      "base_name": "Room 2 - AirConditioner2",
       "state": {"temperature": 24.0, "status": false}
     },
     {
       "device_type": "LightBulb",
-      "base_name": "LightBulb",
+      "base_name": "Room 1 - LightBulb",
+      "state": {"status": false}
+    },
+    {
+      "device_type": "LightBulb",
+      "base_name": "Room 2 - LightBulb",
       "state": {"status": false}
     }
   ]
