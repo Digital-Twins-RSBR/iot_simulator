@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: iot_simulator
+    restart: unless-stopped
+    environment:
+      # - DEVICE_ID=${DEVICE_ID}
+      # - DEVICE_NAME=${DEVICE_NAME}
+      - THINGSBOARD_HOST=${THINGSBOARD_HOST}
+    # command: ["python", "manage.py", "send_telemetry"]
+    # ports:
+      # - "8002:8002"  # apenas se necessário para debug
