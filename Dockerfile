@@ -6,6 +6,9 @@ WORKDIR /iot_simulator
 # Copia os requirements e instala dependências
 COPY requirements/ requirements/
 
+RUN apt-get update && \
+    apt-get install -y iproute2 iputils-ping net-tools procps iptables curl tcpdump inetutils-traceroute dnsutils lsof nano less vim socat iperf3 netcat-openbsd && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r requirements/base.txt
 
 # Copia o restante do código
