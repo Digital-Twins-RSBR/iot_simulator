@@ -22,12 +22,12 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-vy2d7rz5!op+_)f#0g8#!zmzvw@97*a8o-m-j-k)2&5^oyit90'
+SECRET_KEY = os.getenv('SECRET_KEY', 'dev-insecure-key')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True').lower() in ('1', 'true', 'yes', 'on')
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [h for h in os.getenv('ALLOWED_HOSTS', '').split(',') if h] or []
 
 
 # Application definition
@@ -76,12 +76,25 @@ WSGI_APPLICATION = 'iot_simulator.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+# Database: support optional Postgres via env, fallback to sqlite
+if os.getenv('POSTGRES_HOST') or os.getenv('POSTGRES_DB'):
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('POSTGRES_DB', 'iot_simulator'),
+            'USER': os.getenv('POSTGRES_USER', 'postgres'),
+            'PASSWORD': os.getenv('POSTGRES_PASSWORD', ''),
+            'HOST': os.getenv('POSTGRES_HOST', 'localhost'),
+            'PORT': os.getenv('POSTGRES_PORT', '5432'),
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+        }
+    }
 
 
 # Password validation
@@ -124,16 +137,17 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 SESSION_COOKIE_NAME = 'sessionid_iot_simulator'
 CSRF_COOKIE_NAME = 'csrftoken_iot_simulator'
 
-INFLUXDB_HOST = 'localhost'
-INFLUXDB_PORT = 8086
-INFLUXDB_BUCKET = 'iot_data'
-INFLUXDB_ORGANIZATION = 'middts'
-INFLUXDB_TOKEN = 'xxx'
-THINGSBOARD_HOST = "https://demo.thingsboard.io"
-THINGSBOARD_USER = "xxx"
-THINGSBOARD_PASSWORD = "xxx"
-THINGSBOARD_MQTT_PORT = 1883
-THINGSBOARD_MQTT_KEEP_ALIVE = 60
-HEARTBEAT_INTERVAL = 5
+INFLUXDB_HOST = os.getenv('INFLUXDB_HOST', 'localhost')
+INFLUXDB_PORT = int(os.getenv('INFLUXDB_PORT', '8086'))
+INFLUXDB_BUCKET = os.getenv('INFLUXDB_BUCKET', 'iot_data')
+INFLUXDB_ORGANIZATION = os.getenv('INFLUXDB_ORGANIZATION', 'middts')
+INFLUXDB_TOKEN = os.getenv('INFLUXDB_TOKEN', '')
 
-ALLOW_THINGSBOARD_DELETE = True
+THINGSBOARD_HOST = os.getenv('THINGSBOARD_HOST', 'https://demo.thingsboard.io')
+THINGSBOARD_USER = os.getenv('THINGSBOARD_USER', '')
+THINGSBOARD_PASSWORD = os.getenv('THINGSBOARD_PASSWORD', '')
+THINGSBOARD_MQTT_PORT = int(os.getenv('THINGSBOARD_MQTT_PORT', '1883'))
+THINGSBOARD_MQTT_KEEP_ALIVE = int(os.getenv('THINGSBOARD_MQTT_KEEP_ALIVE', '60'))
+HEARTBEAT_INTERVAL = int(os.getenv('HEARTBEAT_INTERVAL', '5'))
+
+ALLOW_THINGSBOARD_DELETE = os.getenv('ALLOW_THINGSBOARD_DELETE', 'True').lower() in ('1', 'true', 'yes')
