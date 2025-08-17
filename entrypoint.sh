@@ -83,6 +83,11 @@ if [ -z "${POSTGRES_HOST:-}" ]; then
 	chmod 666 "$DBFILE" || true
 	chmod 777 "$DBDIR" || true
 	echo "[entrypoint] Usando sqlite3 local: $DBFILE (perms ajustadas)"
+	# If a shell restore helper exists, run it to populate/prepare the sqlite DB
+	if [ -x "/iot_simulator/restore_db.sh" ]; then
+		echo "[entrypoint] Found restore_db.sh -> running restore helper"
+		/bin/sh /iot_simulator/restore_db.sh || echo "[entrypoint] restore_db.sh failed (continuing)"
+	fi
 else
 	echo "[entrypoint] POSTGRES_HOST definido -> usando PostgreSQL. Nota: psycopg é necessário no container para checagens/uso de Postgres."
 fi
