@@ -144,5 +144,17 @@ else
 	echo "INFLUXDB_TOKEN não definido. Escrita no Influx pode falhar."
 fi
 
-echo "Iniciando Gunicorn..."
-exec gunicorn --bind 0.0.0.0:8000 --workers 2 iot_simulator.wsgi:application
+echo "Iniciando simulador: enviando telemetria (send_telemetry) em vez de Gunicorn..."
+# Por padrão rodamos o comando de telemetria do simulator com leituras randomicas.
+# Use VARS para ajustar se desejar: por exemplo, para desabilitar randomize, exporte RANDOMIZE=0
+RANDOMIZE_FLAG="--randomize"
+MEMORY_FLAG="--memory"
+if [ "${RANDOMIZE:-1}" = "0" ]; then
+	RANDOMIZE_FLAG=""
+fi
+if [ "${USE_MEMORY_STATE:-1}" = "0" ]; then
+	MEMORY_FLAG=""
+fi
+
+echo "Comando: python manage.py send_telemetry ${RANDOMIZE_FLAG} ${MEMORY_FLAG}"
+exec python manage.py send_telemetry ${RANDOMIZE_FLAG} ${MEMORY_FLAG}
