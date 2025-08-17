@@ -68,6 +68,24 @@ if ! grep -q '^INFLUXDB_TOKEN=' "$ENV_FILE" 2>/dev/null; then
 else
 	export INFLUXDB_TOKEN="$(grep '^INFLUXDB_TOKEN=' "$ENV_FILE" | cut -d'=' -f2-)"
 fi
+# Se POSTGRES_HOST não estiver definido, assumimos sqlite3 local e garantimos
+# que o arquivo e diretório existam e sejam graváveis para evitar
+# 'unable to open database file' durante as migrations.
+if [ -z "${POSTGRES_HOST:-}" ]; then
+	DBFILE="/iot_simulator/db.sqlite3"
+	DBDIR="$(dirname "$DBFILE")"
+	mkdir -p "$DBDIR" || true
+	if [ ! -f "$DBFILE" ]; then
+		touch "$DBFILE" || true
+		echo "[entrypoint] Criado arquivo sqlite em $DBFILE"
+	fi
+	# Permissões amplas apenas para ambiente de desenvolvimento/containernet
+	chmod 666 "$DBFILE" || true
+	chmod 777 "$DBDIR" || true
+	echo "[entrypoint] Usando sqlite3 local: $DBFILE (perms ajustadas)"
+else
+	echo "[entrypoint] POSTGRES_HOST definido -> usando PostgreSQL. Nota: psycopg é necessário no container para checagens/uso de Postgres."
+fi
 
 echo "Aplicando migrações..."
 python manage.py migrate --noinput
