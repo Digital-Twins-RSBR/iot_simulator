@@ -76,11 +76,26 @@ class TelemetryPublisher:
             password=None,
             keepalive=THINGSBOARD_MQTT_KEEP_ALIVE
         )
-        # Use o client como context manager async para garantir conexão
-        self._mqtt_context = self.mqtt_client.__aenter__()
-        await self._mqtt_context  # conecta o client
-        await self.mqtt_client.subscribe("v1/devices/me/rpc/request/+")
-        asyncio.create_task(self.handle_rpc())
+        # Tentar conectar com retries exponenciais para tolerar brokers que ainda
+        # não aceitaram conexões no momento inicial.
+        attempts = 5
+        delay = 1
+        last_exc = None
+        for attempt in range(1, attempts + 1):
+            try:
+                self._mqtt_context = self.mqtt_client.__aenter__()
+                await self._mqtt_context  # conecta o client
+                # Se conectou, subscribe e continue
+                await self.mqtt_client.subscribe("v1/devices/me/rpc/request/+")
+                asyncio.create_task(self.handle_rpc())
+                return
+            except Exception as e:
+                last_exc = e
+                print(f"[mqtt] connect attempt {attempt} failed: {e}")
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 10)
+        # Se chegou aqui, todas tentativas falharam
+        raise last_exc
 
     async def handle_rpc(self):
         # Para aiomqtt >= 1.0.0, 'messages' é um async iterator, não um context manager.
