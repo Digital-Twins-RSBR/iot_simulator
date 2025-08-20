@@ -138,80 +138,84 @@ class Device(models.Model):
     def save(self, *args, **kwargs):
         is_new = self.pk is None
         super().save(*args, **kwargs)
-        if is_new:
-            # Cria o device no ThingsBoard via API REST autenticando com usuário/senha
-            THINGSBOARD_HOST = settings.THINGSBOARD_HOST.rstrip('/')
-            THINGSBOARD_API_URL = f"{THINGSBOARD_HOST}/api"
-            TB_USER = getattr(settings, "THINGSBOARD_USER", None)
-            TB_PASSWORD = getattr(settings, "THINGSBOARD_PASSWORD", None)
-            if not TB_USER or not TB_PASSWORD:
-                print("THINGSBOARD_USER ou THINGSBOARD_PASSWORD não configurados no settings.")
-                return
+        # Sempre tenta garantir thingsboard_id e token válidos
+        THINGSBOARD_HOST = settings.THINGSBOARD_HOST.rstrip('/')
+        THINGSBOARD_API_URL = f"{THINGSBOARD_HOST}/api"
+        TB_USER = getattr(settings, "THINGSBOARD_USER", None)
+        TB_PASSWORD = getattr(settings, "THINGSBOARD_PASSWORD", None)
+        if not TB_USER or not TB_PASSWORD:
+            print("THINGSBOARD_USER ou THINGSBOARD_PASSWORD não configurados no settings.")
+            return
 
-            # Autentica e obtém JWT
-            try:
-                resp = requests.post(
-                    f"{THINGSBOARD_API_URL}/auth/login",
-                    json={"username": TB_USER, "password": TB_PASSWORD},
-                    headers={"Content-Type": "application/json"}
-                )
-                resp.raise_for_status()
-                jwt_token = resp.json().get("token")
-            except Exception as e:
-                print(f"Erro ao autenticar no ThingsBoard: {e}")
-                return
+        # Autentica e obtém JWT
+        try:
+            resp = requests.post(
+                f"{THINGSBOARD_API_URL}/auth/login",
+                json={"username": TB_USER, "password": TB_PASSWORD},
+                headers={"Content-Type": "application/json"}
+            )
+            resp.raise_for_status()
+            jwt_token = resp.json().get("token")
+        except Exception as e:
+            print(f"Erro ao autenticar no ThingsBoard: {e}")
+            return
 
-            headers = {
-                "Content-Type": "application/json",
-                "X-Authorization": f"Bearer {jwt_token}"
-            }
+        headers = {
+            "Content-Type": "application/json",
+            "X-Authorization": f"Bearer {jwt_token}"
+        }
 
-            # Verifica se o device já existe pelo nome
-            url_search = f"{THINGSBOARD_API_URL}/tenant/devices?deviceName={self.device_id}"
-            try:
-                resp = requests.get(url_search, headers=headers)
-                if resp.status_code == 200 and resp.json().get("data"):
-                    print(f"Device {self.device_id} já existe no ThingsBoard.")
-                    tb_device_id = resp.json()["data"][0]["id"]["id"]
+        # Busca ou cria o device no ThingsBoard
+        url_search = f"{THINGSBOARD_API_URL}/tenant/devices?deviceName={self.device_id}"
+        tb_device_id = None
+        try:
+            resp = requests.get(url_search, headers=headers)
+            if resp.status_code == 200 and resp.json().get("data"):
+                print(f"Device {self.device_id} já existe no ThingsBoard.")
+                tb_device_id = resp.json()["data"][0]["id"]["id"]
+            else:
+                # Cria o device
+                payload = {
+                    "name": self.device_id,
+                    "type": self.device_type.name if hasattr(self.device_type, "name") else "default"
+                }
+                url_create = f"{THINGSBOARD_API_URL}/device"
+                resp = requests.post(url_create, headers=headers, data=json.dumps(payload))
+                if resp.status_code in (200, 201):
+                    tb_device_id = resp.json()["id"]["id"]
+                    print(f"Device {self.device_id} criado no ThingsBoard.")
+                elif resp.status_code == 409:
+                    print(f"Device {self.device_id} já existe no ThingsBoard (409). Buscando ID...")
+                    # Busca o ID mesmo assim
+                    resp = requests.get(url_search, headers=headers)
+                    if resp.status_code == 200 and resp.json().get("data"):
+                        tb_device_id = resp.json()["data"][0]["id"]["id"]
                 else:
-                    # Cria o device
-                    payload = {
-                        "name": self.device_id,
-                        "type": self.device_type.name if hasattr(self.device_type, "name") else "default"
-                    }
-                    url_create = f"{THINGSBOARD_API_URL}/device"
-                    resp = requests.post(url_create, headers=headers, data=json.dumps(payload))
-                    if resp.status_code in (200, 201):
-                        tb_device_id = resp.json()["id"]["id"]
-                        print(f"Device {self.device_id} criado no ThingsBoard.")
-                    elif resp.status_code == 409:
-                        print(f"Device {self.device_id} já existe no ThingsBoard (409).")
-                        return
-                    else:
-                        print(f"Erro ao criar device no ThingsBoard: {resp.status_code} - {resp.text}")
-                        return
-                # Salva o thingsboard_id no modelo
+                    print(f"Erro ao criar device no ThingsBoard: {resp.status_code} - {resp.text}")
+                    return
+            # Salva o thingsboard_id no modelo se mudou
+            if tb_device_id and self.thingsboard_id != tb_device_id:
                 self.thingsboard_id = tb_device_id
                 super().save(update_fields=["thingsboard_id"])
-            except Exception as e:
-                print(f"Erro ao consultar/criar device no ThingsBoard: {e}")
-                return
+        except Exception as e:
+            print(f"Erro ao consultar/criar device no ThingsBoard: {e}")
+            return
 
-            # Recupera o token do device
-            try:
-                url_token = f"{THINGSBOARD_API_URL}/device/{tb_device_id}/credentials"
-                resp = requests.get(url_token, headers=headers)
-                resp.raise_for_status()
-                device_token = resp.json().get("credentialsId")
-                if device_token:
+        # Sempre tenta buscar e salvar o token
+        try:
+            url_token = f"{THINGSBOARD_API_URL}/device/{tb_device_id}/credentials"
+            resp = requests.get(url_token, headers=headers)
+            resp.raise_for_status()
+            device_token = resp.json().get("credentialsId")
+            if device_token:
+                if self.token != device_token:
                     self.token = device_token
-                    # Salva novamente apenas o token
                     super().save(update_fields=["token"])
-                    print(f"Token do device {self.device_id} salvo no modelo.")
-                else:
-                    print(f"Não foi possível recuperar o token do device {self.device_id}.")
-            except Exception as e:
-                print(f"Erro ao recuperar token do device no ThingsBoard: {e}")
+                print(f"Token do device {self.device_id} salvo no modelo.")
+            else:
+                print(f"Não foi possível recuperar o token do device {self.device_id}.")
+        except Exception as e:
+            print(f"Erro ao recuperar token do device no ThingsBoard: {e}")
 
         
         # Atualiza o campo etiqueta (label) do device no ThingsBoard

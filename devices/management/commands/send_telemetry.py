@@ -63,6 +63,17 @@ class TelemetryPublisher:
         self.session = session
         self.use_memory = use_memory
 
+    @classmethod
+    async def create(cls, device, randomize=False, session=None, use_memory=False, device_type_name=""):
+        # Sempre tenta garantir token válido
+        await sync_to_async(device.save)()
+        token = device.token
+        if not token:
+            print(f"[telemetry][ERRO] Device {device.device_id} continua sem token após save(). Não será possível conectar ao ThingsBoard.")
+        else:
+            print(f"[telemetry] Device {device.device_id} pronto para conectar com token {token[:8]}... (ocultado)" )
+        return cls(device, randomize=randomize, session=session, use_memory=use_memory, device_type_name=device_type_name)
+
     @property
     def device_type(self):
         return self._device_type_name
@@ -78,24 +89,26 @@ class TelemetryPublisher:
         )
         # Tentar conectar com retries exponenciais para tolerar brokers que ainda
         # não aceitaram conexões no momento inicial.
-        attempts = 5
+        # Persistent connect: keep retrying until ThingsBoard accepts the TCP/MQTT connection
         delay = 1
-        last_exc = None
-        for attempt in range(1, attempts + 1):
+        timeout_per_attempt = 10
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 self._mqtt_context = self.mqtt_client.__aenter__()
-                await self._mqtt_context  # conecta o client
+                await asyncio.wait_for(self._mqtt_context, timeout=timeout_per_attempt)
                 # Se conectou, subscribe e continue
                 await self.mqtt_client.subscribe("v1/devices/me/rpc/request/+")
                 asyncio.create_task(self.handle_rpc())
-                return
+                print(f"[mqtt] connected to {THINGSBOARD_HOST}:{THINGSBOARD_MQTT_PORT} on attempt {attempt}")
+                return True
+            except asyncio.TimeoutError:
+                print(f"[mqtt] connect attempt {attempt} timed out after {timeout_per_attempt}s; retrying in {delay}s")
             except Exception as e:
-                last_exc = e
-                print(f"[mqtt] connect attempt {attempt} failed: {e}")
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 10)
-        # Se chegou aqui, todas tentativas falharam
-        raise last_exc
+                print(f"[mqtt] connect attempt {attempt} failed: {type(e).__name__}: {e}; retrying in {delay}s")
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 30)
 
     async def handle_rpc(self):
         # Para aiomqtt >= 1.0.0, 'messages' é um async iterator, não um context manager.
@@ -471,21 +484,48 @@ class Command(BaseCommand):
         async def main():
             async with aiohttp.ClientSession() as session:
                 publishers = {}
-                for device in all_devices:
-                    publishers[device.device_id] = TelemetryPublisher(
+                tasks = {}
+
+                async def ensure_publisher_for_device(device):
+                    if device.device_id in publishers:
+                        return
+                    pub = await TelemetryPublisher.create(
                         device,
                         randomize=randomize,
                         session=session,
                         use_memory=use_memory,
-                        device_type_name=device_type_map[device.device_id]  # passe o tipo já resolvido
+                        device_type_name=device_type_map.get(device.device_id, "")
                     )
-                tasks = []
-                for publisher in publishers.values():
-                    tasks.append(asyncio.create_task(
-                        telemetry_task_with_log(publisher, use_influxdb, session)
-                    ))
+                    publishers[device.device_id] = pub
+                    tasks[device.device_id] = asyncio.create_task(telemetry_task_with_log(pub, use_influxdb, session))
+
+                # Initialize publishers for current devices
+                for device in all_devices:
+                    await ensure_publisher_for_device(device)
+
+                async def device_watcher():
+                    # Periodically check for new devices and add publishers dynamically
+                    while True:
+                        await asyncio.sleep(5)
+                        db_devices = await sync_to_async(list)(Device.objects.all())
+                        known_ids = set(publishers.keys())
+                        # new devices
+                        for d in db_devices:
+                            if d.device_id not in known_ids:
+                                print(f"[watcher] New device detected: {d.device_id} -> adding publisher")
+                                # resolve type safely via sync_to_async to avoid SynchronousOnlyOperation
+                                try:
+                                    dtype = await sync_to_async(lambda inst: inst.device_type.name.lower() if inst.device_type else "")(d)
+                                except Exception:
+                                    dtype = ""
+                                device_type_map[d.device_id] = dtype
+                                await ensure_publisher_for_device(d)
+                        # NOTE: we do not stop publishers for removed devices to keep behavior stable
+
+                watcher_task = asyncio.create_task(device_watcher())
+
                 try:
-                    await asyncio.gather(*tasks)
+                    await asyncio.gather(*tasks.values(), watcher_task)
                 except asyncio.CancelledError:
                     pass
 
