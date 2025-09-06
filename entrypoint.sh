@@ -151,6 +151,22 @@ if [ "${USE_MEMORY_STATE:-1}" = "0" ]; then
 fi
 
 echo "Comando: python manage.py send_telemetry ${RANDOMIZE_FLAG} ${MEMORY_FLAG}"
-echo "Iniciando simulador: enviando telemetria (send_telemetry) em vez de Gunicorn..."
+# If this is simulator 1, start a simple HTTP server on 0.0.0.0:8001 in background so the
+# container exposes port 8001 for external access. Keep telemetry sender in foreground.
+if [ "${SIMULATOR_NUMBER:-1}" = "1" ]; then
+	echo "[entrypoint] SIMULATOR_NUMBER=1 -> starting HTTP server on 0.0.0.0:8001 in background"
+	# Use Django runserver as a lightweight HTTP server; redirect logs to /var/log/sim_http_8001.log
+	# POSIX-safe redirection and background handling (avoid bash-only &> and '& ||' syntax)
+	mkdir -p /var/log || true
+	python manage.py runserver 0.0.0.0:8001 >/var/log/sim_http_8001.log 2>&1 &
+	RUNSV_PID=$!
+	# give it a moment to start and verify the process is alive
+	sleep 1
+	if ! kill -0 "$RUNSV_PID" 2>/dev/null; then
+		echo "[entrypoint][WARN] failed to start HTTP server (pid $RUNSV_PID)"
+	else
+		echo "[entrypoint] HTTP server started (pid $RUNSV_PID)"
+	fi
+fi
+echo "Iniciando simulador: enviando telemetria (send_telemetry)..."
 exec python manage.py send_telemetry ${RANDOMIZE_FLAG} ${MEMORY_FLAG}
-echo "Renomeando devices para este simulador $SIMULATOR_NUMBER..."
