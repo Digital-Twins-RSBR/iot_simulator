@@ -79,6 +79,21 @@ class TelemetryPublisher:
         return self._device_type_name
 
     async def connect(self):
+        # Antes de tentar conectar, tente uma reconciliação rápida no banco para
+        # garantir token/credentials atualizados (poderá retornar precocemente se
+        # ThingsBoard estiver inacessível; nesse caso o loop de conexão continuará).
+        try:
+            device = await sync_to_async(Device.objects.get)(pk=self.device_pk)
+            # chama save() para forçar a lógica de sincronização com ThingsBoard
+            await sync_to_async(device.save)()
+            await sync_to_async(device.refresh_from_db)()
+            if device.token:
+                self.token = device.token
+                self.client_id = device.token
+        except Exception as e:
+            # falhas aqui são esperadas se ThingsBoard estiver indisponível; o loop abaixo fará retries
+            print(f"[telemetry] Reconciliação pré-conexão falhou (ignorado por agora): {e}")
+
         # Crie o client DENTRO do contexto async, pois aiomqtt precisa de um event loop rodando
         self.mqtt_client = aiomqtt.Client(
             hostname=THINGSBOARD_HOST,
@@ -106,7 +121,28 @@ class TelemetryPublisher:
             except asyncio.TimeoutError:
                 print(f"[mqtt] connect attempt {attempt} timed out after {timeout_per_attempt}s; retrying in {delay}s")
             except Exception as e:
-                print(f"[mqtt] connect attempt {attempt} failed: {type(e).__name__}: {e}; retrying in {delay}s")
+                # detect MQTT auth failure (ThingsBoard token invalid)
+                msg = str(e)
+                if 'Not authorized' in msg or 'code:135' in msg or 'Not authorized' in getattr(e, 'args', [''])[0]:
+                    print(f"[mqtt] connect attempt {attempt} failed: AUTH error ({e}); attempting token reconciliation...")
+                    try:
+                        # fetch fresh device from DB and trigger save() to refresh token / thingsboard mapping
+                        device = await sync_to_async(Device.objects.get)(pk=self.device_pk)
+                        # call save() in threadpool so Device.save() can perform network calls
+                        await sync_to_async(device.save)()
+                        # reload token after reconciliation
+                        await sync_to_async(device.refresh_from_db)()
+                        new_token = device.token
+                        if new_token:
+                            self.token = new_token
+                            self.client_id = new_token
+                            print(f"[mqtt] reconciliation updated token for {self.device_id[:40]}...; retrying connect")
+                        else:
+                            print(f"[mqtt] reconciliation did not produce a token for {self.device_id}; will retry later")
+                    except Exception as re:
+                        print(f"[mqtt] reconciliation attempt failed: {re}; will retry connect loop")
+                else:
+                    print(f"[mqtt] connect attempt {attempt} failed: {type(e).__name__}: {e}; retrying in {delay}s")
             await asyncio.sleep(delay)
             delay = min(delay * 2, 30)
 
@@ -300,7 +336,28 @@ class TelemetryPublisher:
             print(f"Device {self.token}: Error processing RPC message: {e}")
 
     async def publish(self, payload):
-        await self.mqtt_client.publish("v1/devices/me/telemetry", payload)
+        try:
+            await self.mqtt_client.publish("v1/devices/me/telemetry", payload)
+        except Exception as e:
+            # Handle publish failure: try a reconciliation (refresh token) and reconnect once
+            print(f"[mqtt] publish failed for {self.device_id}: {e}. Trying reconciliation and reconnect...")
+            try:
+                device = await sync_to_async(Device.objects.get)(pk=self.device_pk)
+                await sync_to_async(device.save)()
+                await sync_to_async(device.refresh_from_db)()
+                new_token = device.token
+                if new_token and new_token != self.token:
+                    self.token = new_token
+                    self.client_id = new_token
+                # attempt reconnect
+                await self.connect()
+                # retry publish once
+                await self.mqtt_client.publish("v1/devices/me/telemetry", payload)
+                return
+            except Exception as re:
+                print(f"[mqtt] reconciliação/republish falhou para {self.device_id}: {re}")
+                # swallow exception to avoid killing whole loop
+                return
 
     async def send_telemetry_async(self, use_influxdb=False, session=None):
         device_id = self.device_id

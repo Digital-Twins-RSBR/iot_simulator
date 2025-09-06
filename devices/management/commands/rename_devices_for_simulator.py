@@ -37,4 +37,8 @@ class Command(BaseCommand):
                 device.save()
                 count += 1
                 self.stdout.write(self.style.SUCCESS(f"Renomeado: {novo_nome}"))
+            novo_nome_unit = device.unit.name.replace("House 1", f"House {sim_num}")
+            if device.unit.name != novo_nome_unit:
+                device.unit.name = novo_nome_unit
+                device.unit.save()
         self.stdout.write(self.style.SUCCESS(f"{count} devices renomeados para House {sim_num}"))

@@ -59,10 +59,15 @@ if [ -z "${POSTGRES_HOST:-}" ]; then
 	echo "[entrypoint] Usando sqlite3 local: $DBFILE (perms ajustadas)"
 	if [ -x "/iot_simulator/restore_db.sh" ]; then
 		echo "[entrypoint] Found restore_db.sh -> running restore helper"
-		if [ "${RESET_SIM_DB:-0}" = "1" ]; then
-			/bin/sh /iot_simulator/restore_db.sh --force-reset || echo "[entrypoint] restore_db.sh failed (continuing)"
+		# If we already restored recently, skip restore unless RESET_SIM_DB is explicitly set
+		if [ -f "/iot_simulator/.last_restore" ] && [ "${RESET_SIM_DB:-0}" != "1" ]; then
+			echo "[entrypoint] .last_restore found -> skipping restore (to force restore set RESET_SIM_DB=1)"
 		else
-			/bin/sh /iot_simulator/restore_db.sh || echo "[entrypoint] restore_db.sh failed (continuing)"
+			if [ "${RESET_SIM_DB:-0}" = "1" ]; then
+				/bin/sh /iot_simulator/restore_db.sh --force-reset || echo "[entrypoint] restore_db.sh failed (continuing)"
+			else
+				/bin/sh /iot_simulator/restore_db.sh || echo "[entrypoint] restore_db.sh failed (continuing)"
+			fi
 		fi
 	fi
 else
@@ -148,4 +153,4 @@ fi
 echo "Comando: python manage.py send_telemetry ${RANDOMIZE_FLAG} ${MEMORY_FLAG}"
 echo "Iniciando simulador: enviando telemetria (send_telemetry) em vez de Gunicorn..."
 exec python manage.py send_telemetry ${RANDOMIZE_FLAG} ${MEMORY_FLAG}
-	echo "Renomeando devices para este simulador $SIMULATOR_NUMBER..."
+echo "Renomeando devices para este simulador $SIMULATOR_NUMBER..."
