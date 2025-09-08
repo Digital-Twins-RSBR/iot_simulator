@@ -15,7 +15,26 @@ fi
 
 # Garante THINGSBOARD_HOST correto
 if [ -f "$ENV_FILE" ] && grep -q '^THINGSBOARD_HOST=' "$ENV_FILE" 2>/dev/null; then
-	sed -i 's|^THINGSBOARD_HOST=.*$|THINGSBOARD_HOST=http://10.0.0.11:8080|' "$ENV_FILE"
+		# Use Python to reliably replace the key in-place (some mounts don't support sed -i atomic rename)
+		# pass the target path as an arg so we don't need to interpolate into the heredoc
+		python3 - "$ENV_FILE" <<'PY'
+import sys
+p = sys.argv[1]
+try:
+	with open(p, 'r', encoding='utf-8') as f:
+		lines = f.readlines()
+except FileNotFoundError:
+	lines = []
+found = False
+for i,l in enumerate(lines):
+	if l.startswith('THINGSBOARD_HOST='):
+		lines[i] = 'THINGSBOARD_HOST=http://10.0.0.11:8080\n'
+		found = True
+if not found:
+	lines.append('THINGSBOARD_HOST=http://10.0.0.11:8080\n')
+with open(p, 'w', encoding='utf-8') as f:
+	f.writelines(lines)
+PY
 else
 	echo "THINGSBOARD_HOST=http://10.0.0.11:8080" >> "$ENV_FILE"
 fi
@@ -89,7 +108,10 @@ python manage.py collectstatic --noinput || true
 echo "Aguardando ThingsBoard responder no endpoint /api/auth/login..."
 # hardcoded IP conforme convenção do projeto
 TB_URL="http://10.0.0.11:8080/api/auth/login"
-MAX_WAIT=120
+# Try briefly for ThingsBoard; if still unreachable, continue and let send_telemetry
+# do the active reconciliation/retry. This avoids simulators stuck forever when network
+# to TB is temporarily unavailable.
+MAX_WAIT=30
 WAITED=0
 # arquivos temporários para resposta/erro do curl
 TMP_OUT=$(mktemp /tmp/tb_resp.XXXXXX 2>/dev/null || echo "/tmp/tb_resp_$$")
