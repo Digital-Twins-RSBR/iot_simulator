@@ -59,6 +59,26 @@ if [ -f "$ENV_FILE" ]; then
 	export SECRET_KEY=$(grep '^SECRET_KEY=' "$ENV_FILE" | cut -d'=' -f2-) || true
 fi
 
+# Export Influx variables if present in .env so the long-running process inherits them
+if [ -f "$ENV_FILE" ]; then
+	# Only export known INFLUX variables to avoid leaking other content
+	if grep -q '^INFLUXDB_HOST=' "$ENV_FILE" 2>/dev/null; then
+		export INFLUXDB_HOST=$(grep '^INFLUXDB_HOST=' "$ENV_FILE" | cut -d'=' -f2-)
+	fi
+	if grep -q '^INFLUXDB_PORT=' "$ENV_FILE" 2>/dev/null; then
+		export INFLUXDB_PORT=$(grep '^INFLUXDB_PORT=' "$ENV_FILE" | cut -d'=' -f2-)
+	fi
+	if grep -q '^INFLUXDB_BUCKET=' "$ENV_FILE" 2>/dev/null; then
+		export INFLUXDB_BUCKET=$(grep '^INFLUXDB_BUCKET=' "$ENV_FILE" | cut -d'=' -f2-)
+	fi
+	if grep -q '^INFLUXDB_ORGANIZATION=' "$ENV_FILE" 2>/dev/null; then
+		export INFLUXDB_ORGANIZATION=$(grep '^INFLUXDB_ORGANIZATION=' "$ENV_FILE" | cut -d'=' -f2-)
+	fi
+	if grep -q '^INFLUXDB_TOKEN=' "$ENV_FILE" 2>/dev/null; then
+		export INFLUXDB_TOKEN=$(grep '^INFLUXDB_TOKEN=' "$ENV_FILE" | cut -d'=' -f2-)
+	fi
+fi
+
 # Corrige DJANGO_SETTINGS_MODULE se necessário
 if [ "${DJANGO_SETTINGS_MODULE}" = "iot_simulator.settings" ]; then
 	export DJANGO_SETTINGS_MODULE=iot_simulator.settings
@@ -172,7 +192,11 @@ if [ "${USE_MEMORY_STATE:-1}" = "0" ]; then
 	MEMORY_FLAG=""
 fi
 
-echo "Comando: python manage.py send_telemetry ${RANDOMIZE_FLAG} ${MEMORY_FLAG}"
+USE_INFLUX_FLAG=""
+if [ -n "${INFLUXDB_TOKEN:-}" ]; then
+	USE_INFLUX_FLAG="--use-influxdb"
+fi
+echo "Comando: python manage.py send_telemetry ${USE_INFLUX_FLAG} ${RANDOMIZE_FLAG} ${MEMORY_FLAG}"
 # If this is simulator 1, start a simple HTTP server on 0.0.0.0:8001 in background so the
 # container exposes port 8001 for external access. Keep telemetry sender in foreground.
 if [ "${SIMULATOR_NUMBER:-1}" = "1" ]; then
@@ -191,4 +215,4 @@ if [ "${SIMULATOR_NUMBER:-1}" = "1" ]; then
 	fi
 fi
 echo "Iniciando simulador: enviando telemetria (send_telemetry)..."
-exec python manage.py send_telemetry ${RANDOMIZE_FLAG} ${MEMORY_FLAG}
+exec python manage.py send_telemetry ${USE_INFLUX_FLAG} ${RANDOMIZE_FLAG} ${MEMORY_FLAG}
