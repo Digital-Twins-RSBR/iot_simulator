@@ -31,14 +31,19 @@ class Command(BaseCommand):
         measurement = options['measurement']
         field = options['field']
 
-        # Verify device exists
+        # Verify device exists (lookup by device_id) and has a thingsboard_id
         try:
-            device = Device.objects.get(pk=device_id)
+            device = Device.objects.get(device_id=device_id)
         except Device.DoesNotExist:
             raise CommandError(f'Device with device_id={device_id} not found')
 
+        tb_id = getattr(device, 'thingsboard_id', None)
+        if not tb_id:
+            raise CommandError(f'Device {device_id} has no thingsboard_id set. Cannot write to Influx without a valid thingsboard_id.')
+
         timestamp = int(time.time() * 1000)
-        line = f"{measurement},sensor={device_id},source=simulator {field}={value},sent_timestamp={timestamp} {timestamp}"
+        # Use thingsboard_id as canonical sensor tag for Influx
+        line = f"{measurement},sensor={tb_id},source=simulator {field}={value},sent_timestamp={timestamp} {timestamp}"
 
         headers = {
             'Authorization': f'Token {INFLUXDB_TOKEN}',
