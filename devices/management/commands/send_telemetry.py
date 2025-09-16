@@ -61,6 +61,19 @@ async def post_to_influx(session, data, device=None):
 
     print('--- InfluxDB write debug ---')
     print('Device:', dev_info)
+    # also print raw token and derived sensor_tag for diagnosis
+    try:
+        raw_t = None
+        if device is not None:
+            raw_t = getattr(device, 'token', None)
+        print('Raw token:', raw_t)
+        if raw_t:
+            sensor_tag_dbg = str(raw_t).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
+        else:
+            sensor_tag_dbg = None
+        print('Derived sensor_tag (escaped):', sensor_tag_dbg)
+    except Exception:
+        pass
     print('Line protocol to send:')
     print(data)
 
@@ -513,7 +526,7 @@ class TelemetryPublisher:
                 device_obj = await sync_to_async(Device.objects.get)(pk=self.device_pk)
             except Exception:
                 device_obj = None
-            raw_token = getattr(self, 'token', None)
+            raw_token = getattr(self, 'thingsboard_id', None)
             if raw_token:
                 sensor_tag = str(raw_token).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
             else:
