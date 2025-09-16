@@ -35,6 +35,47 @@ INFLUXDB_ORGANIZATION = settings.INFLUXDB_ORGANIZATION
 INFLUXDB_URL = f"http://{INFLUXDB_HOST}:{INFLUXDB_PORT}/api/v2/write?org={INFLUXDB_ORGANIZATION}&bucket={INFLUXDB_BUCKET}&precision=ms"
 INFLUXDB_TOKEN = settings.INFLUXDB_TOKEN
 
+
+async def post_to_influx(session, data, device=None):
+    """Helper to POST line-protocol to Influx and print detailed debug info about the device and payload."""
+    headers = {
+        "Authorization": f"Token {INFLUXDB_TOKEN}",
+        "Content-Type": "text/plain",
+    }
+    # Debug print of device fields (safe access)
+    try:
+        if device is not None:
+            try:
+                dev_info = {
+                    'device_id': getattr(device, 'device_id', None),
+                    'token': (getattr(device, 'token', None)[:12] + '...') if getattr(device, 'token', None) else None,
+                    'thingsboard_id': getattr(device, 'thingsboard_id', None),
+                    'state': getattr(device, 'state', None),
+                }
+            except Exception:
+                dev_info = str(device)
+        else:
+            dev_info = '<no device object>'
+    except Exception:
+        dev_info = '<error reading device>'
+
+    print('--- InfluxDB write debug ---')
+    print('Device:', dev_info)
+    print('Line protocol to send:')
+    print(data)
+
+    try:
+        async with session.post(INFLUXDB_URL, headers=headers, data=data) as response:
+            text = await response.text()
+            print(f"Response Code: {response.status}, Response Text: {text}")
+            return response.status, text
+    except Exception as e:
+        print('Exception while sending to InfluxDB:', e)
+        import traceback
+        traceback.print_exc()
+        raise
+
+
 DEVICE_STATE = defaultdict(dict)
 
 class TelemetryPublisher:
@@ -170,9 +211,8 @@ class TelemetryPublisher:
             }
 
             async def send_influx(data):
-                async with self.session.post(INFLUXDB_URL, headers=headers, data=data) as response:
-                    text = await response.text()
-                    print(f"Response Code: {response.status}, Response Text: {text}")
+                # use shared helper to print device fields and payload
+                await post_to_influx(self.session, data, device)
 
             # Use armazenamento em memória ou banco conforme o modo
             if self.use_memory:
@@ -467,35 +507,47 @@ class TelemetryPublisher:
                 "Content-Type": "text/plain",
             }
             timestamp = int(time.time() * 1000)
+            # determine sensor tag from token and sanitize
+            device_obj = None
+            try:
+                device_obj = await sync_to_async(Device.objects.get)(pk=self.device_pk)
+            except Exception:
+                device_obj = None
+            raw_token = getattr(self, 'token', None)
+            if raw_token:
+                sensor_tag = str(raw_token).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
+            else:
+                sensor_tag = None
             if device_type in ["temperature sensor", "dht22", "airconditioner"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
                 temperature = state.get("temperature", 0)
                 humidity = state.get("humidity", 0)
-                data = f"device_data,sensor={device_id},source=simulator status={int(status)},temperature={temperature},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},temperature={temperature},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["led", "lightbulb"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={device_id},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["soilhumidity sensor", "soil humidity sensor"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
                 humidity = state.get("humidity", 0)
-                data = f"device_data,sensor={device_id},source=simulator status={int(status)},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["pump", "pool", "irrigation"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={device_id},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
             else:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={device_id},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
-
-            async with session.post(INFLUXDB_URL, headers=headers, data=data) as response:
-                text = await response.text()
-                print(f"Response Code: {response.status}, Response Text: {text}")
-                if response.status != 204:
-                    print(f"Error sending data to InfluxDB: {response.status} - {text}")
+                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+            # use helper that prints device fields and the payload
+            try:
+                status_code, text = await post_to_influx(session, data, device=device_obj)
+                if status_code != 204 and status_code != 200:
+                    print(f"Error sending data to InfluxDB: {status_code} - {text}")
+            except Exception:
+                print("Failed to post to InfluxDB; see debug above")
 
 async def telemetry_task(publisher, use_influxdb, session):
     await publisher.connect()
