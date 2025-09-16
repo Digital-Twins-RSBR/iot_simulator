@@ -37,13 +37,16 @@ class Command(BaseCommand):
         except Device.DoesNotExist:
             raise CommandError(f'Device with device_id={device_id} not found')
 
-        tb_id = getattr(device, 'thingsboard_id', None)
-        if not tb_id:
-            raise CommandError(f'Device {device_id} has no thingsboard_id set. Cannot write to Influx without a valid thingsboard_id.')
+        token = getattr(device, 'token', None)
+        if not token:
+            raise CommandError(f'Device {device_id} has no token set. Cannot write to Influx without a valid token.')
+
+        # sanitize token for line-protocol tag value
+        sensor_tag = str(token).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
 
         timestamp = int(time.time() * 1000)
-        # Use thingsboard_id as canonical sensor tag for Influx
-        line = f"{measurement},sensor={tb_id},source=simulator {field}={value},sent_timestamp={timestamp} {timestamp}"
+        # Use token as canonical sensor tag for Influx
+        line = f"{measurement},sensor={sensor_tag},source=simulator {field}={value},sent_timestamp={timestamp} {timestamp}"
 
         headers = {
             'Authorization': f'Token {INFLUXDB_TOKEN}',

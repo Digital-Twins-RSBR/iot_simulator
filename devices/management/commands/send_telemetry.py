@@ -35,49 +35,6 @@ INFLUXDB_ORGANIZATION = settings.INFLUXDB_ORGANIZATION
 INFLUXDB_URL = f"http://{INFLUXDB_HOST}:{INFLUXDB_PORT}/api/v2/write?org={INFLUXDB_ORGANIZATION}&bucket={INFLUXDB_BUCKET}&precision=ms"
 INFLUXDB_TOKEN = settings.INFLUXDB_TOKEN
 
-
-# Helpers to format InfluxDB line protocol safely
-def _escape_key_tag(value):
-    # escape commas, spaces and equals in tag/field keys and tag values
-    s = str(value)
-    s = s.replace('\\', '\\\\')
-    s = s.replace(' ', '\\ ')
-    s = s.replace(',', '\\,')
-    s = s.replace('=', '\\=')
-    return s
-
-def _format_field_value(v):
-    # booleans -> true/false, ints -> suffix i, floats -> plain, strings quoted
-    if isinstance(v, bool):
-        return 'true' if v else 'false'
-    if isinstance(v, int) and not isinstance(v, bool):
-        return f"{v}i"
-    if isinstance(v, float):
-        # ensure locale-independent representation
-        return repr(v)
-    # fallback to string
-    s = str(v)
-    s = s.replace('"', '\\"')
-    return f'"{s}"'
-
-def format_influx_line(measurement, tags, fields, timestamp=None):
-    m = _escape_key_tag(measurement)
-    tag_parts = []
-    for k, v in (tags or {}).items():
-        if v is None:
-            continue
-        tag_parts.append(f"{_escape_key_tag(k)}={_escape_key_tag(v)}")
-    field_parts = []
-    for k, v in (fields or {}).items():
-        field_parts.append(f"{_escape_key_tag(k)}={_format_field_value(v)}")
-    left = m
-    if tag_parts:
-        left = f"{left},{','.join(tag_parts)}"
-    line = f"{left} {','.join(field_parts)}"
-    if timestamp is not None:
-        line = f"{line} {int(timestamp)}"
-    return line
-
 DEVICE_STATE = defaultdict(dict)
 
 class TelemetryPublisher:
@@ -213,12 +170,6 @@ class TelemetryPublisher:
             }
 
             async def send_influx(data):
-                # DEBUG: print the exact payload we are attempting to send to InfluxDB
-                try:
-                    print(f"[influx-send] Payload:\n{data}\n--- end payload ---")
-                except Exception:
-                    # ensure debug printing never crashes
-                    print("[influx-send] Payload: <unprintable>")
                 async with self.session.post(INFLUXDB_URL, headers=headers, data=data) as response:
                     text = await response.text()
                     print(f"Response Code: {response.status}, Response Text: {text}")
@@ -232,8 +183,13 @@ class TelemetryPublisher:
                 state = device.state or {}
                 device_type = await sync_to_async(lambda d: d.device_type.name.lower())(device)
 
-            # For external storages like Influx, prefer the ThingsBoard device id
-            tb_id = getattr(self, 'thingsboard_id', None)
+            # For external storages like Influx, use the device token as canonical identifier
+            # sanitize token for line-protocol tag value (escape commas, spaces and =)
+            raw_token = getattr(self, 'token', None)
+            if raw_token:
+                sensor_tag = str(raw_token).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
+            else:
+                sensor_tag = None
 
             if device_type in self.LIGHTS or device_type == "lightbulb":
                 if method == "switchLed":
@@ -246,13 +202,11 @@ class TelemetryPublisher:
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
                     print(f"Device {device_id}: LED updated to {new_status} via RPC")
-                    if tb_id:
-                        tags = {"sensor": tb_id, "source": "simulator"}
-                        fields = {"status": int(new_status), "received_timestamp": received_timestamp}
-                        data = format_influx_line("device_data", tags, fields, timestamp=received_timestamp)
+                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no thingsboard_id")
+                        print(f"Skipping Influx write: device {self.device_id} has no token")
                     response_topic = msg.topic.replace("request", "response")
                     await self.mqtt_client.publish(response_topic, json.dumps({"status": new_status}))
                 if method == "checkStatus":
@@ -279,13 +233,11 @@ class TelemetryPublisher:
                     response_topic = msg.topic.replace("request", "response")
                     await self.mqtt_client.publish(response_topic, telemetry)
                     print(f"Device {device_id}: Sent Temperature Sensor checkStatus via RPC")
-                    if tb_id:
-                        tags = {"sensor": tb_id, "source": "simulator"}
-                        fields = {"temperature": float(temperature), "received_timestamp": received_timestamp}
-                        data = format_influx_line("device_data", tags, fields, timestamp=received_timestamp)
+                    data = f"device_data,sensor={sensor_tag},source=simulator temperature={temperature},received_timestamp={received_timestamp} {received_timestamp}"
+                    if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no thingsboard_id")
+                        print(f"Skipping Influx write: device {self.device_id} has no token")
 
             elif device_type in self.SOILHUMIDITY_SENSOR or device_type == "soil humidity sensor":
                 if method == "checkStatus":
@@ -300,13 +252,11 @@ class TelemetryPublisher:
                     response_topic = msg.topic.replace("request", "response")
                     await self.mqtt_client.publish(response_topic, telemetry)
                     print(f"Device {device.device_id}: Sent Soil Humidity Sensor checkStatus via RPC")
-                    if tb_id:
-                        tags = {"sensor": tb_id, "source": "simulator"}
-                        fields = {"humidity": float(humidity), "received_timestamp": received_timestamp}
-                        data = format_influx_line("device_data", tags, fields, timestamp=received_timestamp)
+                    data = f"device_data,sensor={sensor_tag},source=simulator humidity={humidity},received_timestamp={received_timestamp} {received_timestamp}"
+                    if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no thingsboard_id")
+                        print(f"Skipping Influx write: device {self.device_id} has no token")
 
             elif device_type in self.PUMP or device_type == "pump":
                 if method == "switchPump":
@@ -316,13 +266,11 @@ class TelemetryPublisher:
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
                     print(f"Device {device.device_id}: Pump updated to {new_status} via RPC")
-                    if tb_id:
-                        tags = {"sensor": tb_id, "source": "simulator"}
-                        fields = {"status": int(new_status), "received_timestamp": received_timestamp}
-                        data = format_influx_line("device_data", tags, fields, timestamp=received_timestamp)
+                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no thingsboard_id")
+                        print(f"Skipping Influx write: device {self.device_id} has no token")
                     response_topic = msg.topic.replace("request", "response")
                     await self.mqtt_client.publish(response_topic, json.dumps({"status": new_status}))
                 if method == "checkStatus":
@@ -338,13 +286,11 @@ class TelemetryPublisher:
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
                     print(f"Device {device.device_id}: Pool updated to {new_status} via RPC")
-                    if tb_id:
-                        tags = {"sensor": tb_id, "source": "simulator"}
-                        fields = {"status": int(new_status), "received_timestamp": received_timestamp}
-                        data = format_influx_line("device_data", tags, fields, timestamp=received_timestamp)
+                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no thingsboard_id")
+                        print(f"Skipping Influx write: device {self.device_id} has no token")
                     response_topic = msg.topic.replace("request", "response")
                     await self.mqtt_client.publish(response_topic, json.dumps({"status": new_status}))
                 if method == "checkStatus":
@@ -360,13 +306,11 @@ class TelemetryPublisher:
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
                     print(f"Device {device.device_id}: Irrigation updated to {new_status} via RPC")
-                    if tb_id:
-                        tags = {"sensor": tb_id, "source": "simulator"}
-                        fields = {"status": int(new_status), "received_timestamp": received_timestamp}
-                        data = format_influx_line("device_data", tags, fields, timestamp=received_timestamp)
+                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no thingsboard_id")
+                        print(f"Skipping Influx write: device {self.device_id} has no token")
                     response_topic = msg.topic.replace("request", "response")
                     await self.mqtt_client.publish(response_topic, json.dumps({"status": new_status}))
                 if method == "checkStatus":
@@ -396,13 +340,11 @@ class TelemetryPublisher:
                     response_topic = msg.topic.replace("request", "response")
                     await self.mqtt_client.publish(response_topic, telemetry)
                     print(f"Device {device.device_id}: Sent AirConditioner checkStatus via RPC")
-                    if tb_id:
-                        tags = {"sensor": tb_id, "source": "simulator"}
-                        fields = {"temperature": float(temperature), "humidity": float(humidity), "status": int(status), "received_timestamp": received_timestamp}
-                        data = format_influx_line("device_data", tags, fields, timestamp=received_timestamp)
+                    data = f"device_data,sensor={sensor_tag},source=simulator temperature={temperature},humidity={humidity},status={int(status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no thingsboard_id")
+                        print(f"Skipping Influx write: device {self.device_id} has no token")
                 if method == "switchStatus":
                     new_status = bool(params)
                     current_state = device.state or {}
@@ -415,13 +357,11 @@ class TelemetryPublisher:
                     telemetry = json.dumps(device.state)
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
                     print(f"Device {device.device_id}: AirConditioner status updated to {new_status} via RPC")
-                    if tb_id:
-                        tags = {"sensor": tb_id, "source": "simulator"}
-                        fields = {"status": int(new_status), "received_timestamp": received_timestamp}
-                        data = format_influx_line("device_data", tags, fields, timestamp=received_timestamp)
+                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no thingsboard_id")
+                        print(f"Skipping Influx write: device {self.device_id} has no token")
                     response_topic = msg.topic.replace("request", "response")
                     await self.mqtt_client.publish(response_topic, json.dumps({"status": new_status}))
             else:
@@ -527,30 +467,29 @@ class TelemetryPublisher:
                 "Content-Type": "text/plain",
             }
             timestamp = int(time.time() * 1000)
-            # Build fields/tags using the helper to ensure valid Influx line protocol
-            state = DEVICE_STATE[device_id] if self.use_memory else state
-            status = state.get("status", False)
-            tags = {"sensor": device_id, "source": "simulator"}
             if device_type in ["temperature sensor", "dht22", "airconditioner"]:
+                state = DEVICE_STATE[device_id] if self.use_memory else state
+                status = state.get("status", False)
                 temperature = state.get("temperature", 0)
                 humidity = state.get("humidity", 0)
-                fields = {"status": int(status), "temperature": float(temperature), "humidity": float(humidity), "sent_timestamp": timestamp}
+                data = f"device_data,sensor={device_id},source=simulator status={int(status)},temperature={temperature},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["led", "lightbulb"]:
-                fields = {"status": int(status), "sent_timestamp": timestamp}
+                state = DEVICE_STATE[device_id] if self.use_memory else state
+                status = state.get("status", False)
+                data = f"device_data,sensor={device_id},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["soilhumidity sensor", "soil humidity sensor"]:
+                state = DEVICE_STATE[device_id] if self.use_memory else state
+                status = state.get("status", False)
                 humidity = state.get("humidity", 0)
-                fields = {"status": int(status), "humidity": float(humidity), "sent_timestamp": timestamp}
+                data = f"device_data,sensor={device_id},source=simulator status={int(status)},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["pump", "pool", "irrigation"]:
-                fields = {"status": int(status), "sent_timestamp": timestamp}
+                state = DEVICE_STATE[device_id] if self.use_memory else state
+                status = state.get("status", False)
+                data = f"device_data,sensor={device_id},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
             else:
-                fields = {"status": int(status), "sent_timestamp": timestamp}
-
-            data = format_influx_line("device_data", tags, fields, timestamp=timestamp)
-            # DEBUG: print exact payload for periodic telemetry
-            try:
-                print(f"[influx-send-periodic] Payload:\n{data}\n--- end payload ---")
-            except Exception:
-                print("[influx-send-periodic] Payload: <unprintable>")
+                state = DEVICE_STATE[device_id] if self.use_memory else state
+                status = state.get("status", False)
+                data = f"device_data,sensor={device_id},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
 
             async with session.post(INFLUXDB_URL, headers=headers, data=data) as response:
                 text = await response.text()
