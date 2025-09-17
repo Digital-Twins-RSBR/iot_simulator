@@ -134,7 +134,7 @@ class TelemetryPublisher:
     def device_type(self):
         return self._device_type_name
 
-    async def connect(self):
+    async def connect(self, spawn_handle: bool = True):
         # Antes de tentar conectar, tente uma reconciliação rápida no banco para
         # garantir token/credentials atualizados (poderá retornar precocemente se
         # ThingsBoard estiver inacessível; nesse caso o loop de conexão continuará).
@@ -171,7 +171,14 @@ class TelemetryPublisher:
                 await asyncio.wait_for(self._mqtt_context, timeout=timeout_per_attempt)
                 # Se conectou, subscribe e continue
                 await self.mqtt_client.subscribe("v1/devices/me/rpc/request/+")
-                asyncio.create_task(self.handle_rpc())
+                # Only spawn a handle_rpc task if requested and not already running
+                try:
+                    if spawn_handle:
+                        if not hasattr(self, '_rpc_task') or self._rpc_task.done():
+                            self._rpc_task = asyncio.create_task(self.handle_rpc())
+                except Exception:
+                    # If task creation fails, continue; handle_rpc will be invoked on next successful connect
+                    pass
                 print(f"[mqtt] connected to {THINGSBOARD_HOST}:{THINGSBOARD_MQTT_PORT} on attempt {attempt}")
                 return True
             except asyncio.TimeoutError:
@@ -204,46 +211,109 @@ class TelemetryPublisher:
 
     async def handle_rpc(self):
         # Para aiomqtt >= 1.0.0, 'messages' é um async iterator, não um context manager.
-        async for msg in self.mqtt_client.messages:
-            await self.on_message(msg)
+        while True:
+            try:
+                async for msg in self.mqtt_client.messages:
+                    await self.on_message(msg)
+            except aiomqtt.MqttError as me:
+                # Handle disconnects by attempting a reconnect without spawning another handle_rpc task
+                print(f"[mqtt] message iterator error: {me}; attempting reconnect...")
+                try:
+                    await asyncio.sleep(0.5)
+                    await self.connect(spawn_handle=False)
+                except Exception as recon_e:
+                    print(f"[mqtt] reconnect attempt failed: {recon_e}; will retry shortly")
+                    await asyncio.sleep(1)
+                # loop and resume listening
+                continue
+            except Exception as e:
+                print(f"[mqtt] unexpected error in handle_rpc: {e}")
+                await asyncio.sleep(1)
+                continue
 
     async def on_message(self, msg):
-        print(f"Device {self.token}: Message received on topic {msg.topic}: {msg.payload.decode()}")
+        # Normalize topic to string (aiomqtt may provide a Topic object)
+        topic_str = str(msg.topic)
+        print(f"Device {self.token}: Message received on topic {topic_str}: {msg.payload.decode()}")
+
+        # Parse payload safely
         try:
             payload = json.loads(msg.payload.decode())
-            method = payload.get("method")
-            params = payload.get("params")
+        except Exception:
+            payload = {}
+        method = payload.get("method")
+        params = payload.get("params")
 
-            device_id = self.device_id
-            device_type = self.device_type
+        # Extract request id from topic (ThingsBoard uses v1/devices/me/rpc/request/<id>)
+        try:
+            request_id = topic_str.split('/')[-1]
+        except Exception:
+            request_id = None
 
+        device_id = self.device_id
+        try:
             received_timestamp = int(time.time() * 1000)
-            headers = {
-                "Authorization": f"Token {INFLUXDB_TOKEN}",
-                "Content-Type": "text/plain"
-            }
 
-            async def send_influx(data):
-                # use shared helper to print device fields and payload
-                await post_to_influx(self.session, data, device)
+            # Log RPC reception to deploy/logs/simulator_rpc_received.log for auditing
+            try:
+                import pathlib, getpass
+                log_dir = pathlib.Path(__file__).resolve().parents[3] / 'deploy' / 'logs'
+                log_dir.mkdir(parents=True, exist_ok=True)
+                recv_log = log_dir / 'simulator_rpc_received.log'
+                # Mask token for privacy (show first 6 chars)
+                masked = (self.token[:6] + '...') if getattr(self, 'token', None) else None
+                recv_entry = {
+                    'ts': received_timestamp,
+                    'device_id': device_id,
+                    'thingsboard_id': getattr(self, 'thingsboard_id', None),
+                    'masked_token': masked,
+                    'request_id': request_id,
+                    'method': method,
+                    'params': params,
+                    'topic': topic_str
+                }
+                with recv_log.open('a') as rf:
+                    rf.write(json.dumps(recv_entry) + '\n')
+            except Exception:
+                # Swallow logging errors to avoid affecting RPC handling
+                pass
 
             # Use armazenamento em memória ou banco conforme o modo
+            # Initialize local device_type with fallback to self.device_type so it's always defined
+            device_type = self.device_type
             if self.use_memory:
                 state = DEVICE_STATE[device_id]
+                device = None
             else:
                 device = await sync_to_async(Device.objects.get)(pk=self.device_pk)
                 await sync_to_async(device.refresh_from_db)()
                 state = device.state or {}
-                device_type = await sync_to_async(lambda d: d.device_type.name.lower())(device)
+                # resolve device_type from device instance if possible
+                try:
+                    device_type = (device.device_type.name or "").lower()
+                except Exception:
+                    # keep the fallback already assigned from self.device_type
+                    pass
+
+            async def send_influx(data, device_obj=None):
+                # helper: forward to shared post_to_influx, prefer explicit device_obj when provided
+                try:
+                    await post_to_influx(self.session, data, device_obj if device_obj is not None else device)
+                except Exception:
+                    # swallow to avoid breaking RPC handling
+                    import traceback
+                    traceback.print_exc()
 
             # For external storages like Influx, use the device token as canonical identifier
-            # sanitize token for line-protocol tag value (escape commas, spaces and =)
-            raw_token = getattr(self, 'token', None)
+            raw_token = getattr(self, 'thingsboard_id', None)
             if raw_token:
                 sensor_tag = str(raw_token).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
             else:
                 sensor_tag = None
 
+            response_topic = topic_str.replace("request", "response")
+
+            # Handle device-specific RPC methods
             if device_type in self.LIGHTS or device_type == "lightbulb":
                 if method == "switchLed":
                     new_status = bool(params)
@@ -255,17 +325,27 @@ class TelemetryPublisher:
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
                     print(f"Device {device_id}: LED updated to {new_status} via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if new_status else 0.0)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no token")
-                    response_topic = msg.topic.replace("request", "response")
-                    await self.mqtt_client.publish(response_topic, json.dumps({"status": new_status}))
+                        print(f"Skipping Influx write: device {device_id} has no token")
+
+                    # Reply to the RPC request so ThingsBoard doesn't report TIMEOUT for two-way RPCs
+                    if request_id:
+                        try:
+                            resp_topic = f"v1/devices/me/rpc/response/{request_id}"
+                            resp_payload = json.dumps({"status": new_status})
+                            await self.publish_rpc_response(resp_topic, resp_payload)
+                        except Exception as e:
+                            print(f"Device {device_id}: Failed to publish RPC response: {e}")
+
+                    await self.publish_rpc_response(response_topic, json.dumps({"status": new_status}))
+
                 if method == "checkStatus":
-                    status = DEVICE_STATE[device_id].get("status", False) if self.use_memory else device.state.get("status", False)
-                    response_topic = msg.topic.replace("request", "response")
-                    await self.mqtt_client.publish(response_topic, json.dumps({"status": status}))
+                    status = DEVICE_STATE[device_id].get("status", False) if self.use_memory else (device.state.get("status", False) if device and device.state else False)
+                    await self.publish_rpc_response(response_topic, json.dumps({"status": status}))
+
             elif device_type in self.TEMPERATURE_SENSOR or device_type == "temperature sensor":
                 if method == "checkStatus":
                     if self.use_memory:
@@ -283,14 +363,14 @@ class TelemetryPublisher:
                         device.state = new_state
                         await sync_to_async(device.save)()
                         telemetry = json.dumps(new_state)
-                    response_topic = msg.topic.replace("request", "response")
-                    await self.mqtt_client.publish(response_topic, telemetry)
+
+                    await self.publish_rpc_response(response_topic, telemetry)
                     print(f"Device {device_id}: Sent Temperature Sensor checkStatus via RPC")
                     data = f"device_data,sensor={sensor_tag},source=simulator temperature={temperature},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no token")
+                        print(f"Skipping Influx write: device {device_id} has no token")
 
             elif device_type in self.SOILHUMIDITY_SENSOR or device_type == "soil humidity sensor":
                 if method == "checkStatus":
@@ -302,14 +382,13 @@ class TelemetryPublisher:
                     device.state = new_state
                     await sync_to_async(device.save)()
                     telemetry = json.dumps(new_state)
-                    response_topic = msg.topic.replace("request", "response")
-                    await self.mqtt_client.publish(response_topic, telemetry)
-                    print(f"Device {device.device_id}: Sent Soil Humidity Sensor checkStatus via RPC")
+                    await self.publish_rpc_response(response_topic, telemetry)
+                    print(f"Device {device_id}: Sent Soil Humidity Sensor checkStatus via RPC")
                     data = f"device_data,sensor={sensor_tag},source=simulator humidity={humidity},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no token")
+                        print(f"Skipping Influx write: device {device_id} has no token")
 
             elif device_type in self.PUMP or device_type == "pump":
                 if method == "switchPump":
@@ -318,18 +397,16 @@ class TelemetryPublisher:
                     await sync_to_async(device.save)()
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
-                    print(f"Device {device.device_id}: Pump updated to {new_status} via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    print(f"Device {device_id}: Pump updated to {new_status} via RPC")
+                    data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if new_status else 0.0)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no token")
-                    response_topic = msg.topic.replace("request", "response")
-                    await self.mqtt_client.publish(response_topic, json.dumps({"status": new_status}))
+                        print(f"Skipping Influx write: device {device_id} has no token")
+                    await self.publish_rpc_response(response_topic, json.dumps({"status": new_status}))
                 if method == "checkStatus":
                     telemetry = device.state.get("status", False)
-                    response_topic = msg.topic.replace("request", "response")
-                    await self.mqtt_client.publish(response_topic, json.dumps({"status": telemetry}))
+                    await self.publish_rpc_response(response_topic, json.dumps({"status": telemetry}))
 
             elif device_type in self.POOL or device_type == "pool":
                 if method == "switchPool":
@@ -338,18 +415,16 @@ class TelemetryPublisher:
                     await sync_to_async(device.save)()
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
-                    print(f"Device {device.device_id}: Pool updated to {new_status} via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    print(f"Device {device_id}: Pool updated to {new_status} via RPC")
+                    data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if new_status else 0.0)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no token")
-                    response_topic = msg.topic.replace("request", "response")
-                    await self.mqtt_client.publish(response_topic, json.dumps({"status": new_status}))
+                        print(f"Skipping Influx write: device {device_id} has no token")
+                    await self.publish_rpc_response(response_topic, json.dumps({"status": new_status}))
                 if method == "checkStatus":
                     telemetry = device.state.get("status", False)
-                    response_topic = msg.topic.replace("request", "response")
-                    await self.mqtt_client.publish(response_topic, json.dumps({"status": telemetry}))
+                    await self.publish_rpc_response(response_topic, json.dumps({"status": telemetry}))
 
             elif device_type in self.IRRIGATION or device_type == "irrigation":
                 if method == "switchIrrigation":
@@ -358,17 +433,15 @@ class TelemetryPublisher:
                     await sync_to_async(device.save)()
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
-                    print(f"Device {device.device_id}: Irrigation updated to {new_status} via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    print(f"Device {device_id}: Irrigation updated to {new_status} via RPC")
+                    data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if new_status else 0.0)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no token")
-                    response_topic = msg.topic.replace("request", "response")
-                    await self.mqtt_client.publish(response_topic, json.dumps({"status": new_status}))
+                        print(f"Skipping Influx write: device {device_id} has no token")
+                    await self.publish_rpc_response(response_topic, json.dumps({"status": new_status}))
                 if method == "checkStatus":
                     telemetry = device.state.get("status", False)
-                    response_topic = msg.topic.replace("request", "response")
                     await self.mqtt_client.publish(response_topic, json.dumps({"status": telemetry}))
 
             elif device_type in self.AIR_CONDITIONER or device_type == "airconditioner":
@@ -390,14 +463,13 @@ class TelemetryPublisher:
                     device.state = new_state
                     await sync_to_async(device.save)()
                     telemetry = json.dumps(new_state)
-                    response_topic = msg.topic.replace("request", "response")
                     await self.mqtt_client.publish(response_topic, telemetry)
-                    print(f"Device {device.device_id}: Sent AirConditioner checkStatus via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator temperature={temperature},humidity={humidity},status={int(status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    print(f"Device {device_id}: Sent AirConditioner checkStatus via RPC")
+                    data = f"device_data,sensor={sensor_tag},source=simulator temperature={temperature},humidity={humidity},status={float(1.0 if status else 0.0)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no token")
+                        print(f"Skipping Influx write: device {device_id} has no token")
                 if method == "switchStatus":
                     new_status = bool(params)
                     current_state = device.state or {}
@@ -409,16 +481,15 @@ class TelemetryPublisher:
                     await sync_to_async(device.save)()
                     telemetry = json.dumps(device.state)
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
-                    print(f"Device {device.device_id}: AirConditioner status updated to {new_status} via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    print(f"Device {device_id}: AirConditioner status updated to {new_status} via RPC")
+                    data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if new_status else 0.0)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
-                        print(f"Skipping Influx write: device {self.device_id} has no token")
-                    response_topic = msg.topic.replace("request", "response")
+                        print(f"Skipping Influx write: device {device_id} has no token")
                     await self.mqtt_client.publish(response_topic, json.dumps({"status": new_status}))
             else:
-                print(f"Device {device.device_id}: Unsupported device type for RPC.")
+                print(f"Device {device_id}: Unsupported device type for RPC.")
         except Exception as e:
             print(f"Device {self.token}: Error processing RPC message: {e}")
 
@@ -445,6 +516,24 @@ class TelemetryPublisher:
                 print(f"[mqtt] reconciliação/republish falhou para {self.device_id}: {re}")
                 # swallow exception to avoid killing whole loop
                 return
+
+    async def publish_rpc_response(self, topic, payload, retries=1):
+        """Publish an RPC response, with a single reconnect+retry if the client is disconnected."""
+        try:
+            await self.mqtt_client.publish(topic, payload)
+            print(f"Published RPC response to {topic}: {payload}")
+            return True
+        except Exception as e:
+            print(f"Publish RPC response failed for {topic}: {e}; attempting reconnect and retry...")
+            try:
+                # attempt reconnect
+                await self.connect()
+                await self.mqtt_client.publish(topic, payload)
+                print(f"Published RPC response to {topic} after reconnect: {payload}")
+                return True
+            except Exception as e2:
+                print(f"Failed to publish RPC response after reconnect for {topic}: {e2}")
+                return False
 
     async def send_telemetry_async(self, use_influxdb=False, session=None):
         device_id = self.device_id
@@ -536,24 +625,24 @@ class TelemetryPublisher:
                 status = state.get("status", False)
                 temperature = state.get("temperature", 0)
                 humidity = state.get("humidity", 0)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},temperature={temperature},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if status else 0.0)},temperature={temperature},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["led", "lightbulb"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if status else 0.0)},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["soilhumidity sensor", "soil humidity sensor"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
                 humidity = state.get("humidity", 0)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if status else 0.0)},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["pump", "pool", "irrigation"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if status else 0.0)},sent_timestamp={timestamp} {timestamp}"
             else:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if status else 0.0)},sent_timestamp={timestamp} {timestamp}"
             # use helper that prints device fields and the payload
             try:
                 status_code, text = await post_to_influx(session, data, device=device_obj)
