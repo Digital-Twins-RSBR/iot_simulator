@@ -255,7 +255,7 @@ class TelemetryPublisher:
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
                     print(f"Device {device_id}: LED updated to {new_status} via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    data = f"device_data,sensor={sensor_tag},source=simulator status_i={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
@@ -319,7 +319,7 @@ class TelemetryPublisher:
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
                     print(f"Device {device.device_id}: Pump updated to {new_status} via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    data = f"device_data,sensor={sensor_tag},source=simulator status_i={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
@@ -339,7 +339,7 @@ class TelemetryPublisher:
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
                     print(f"Device {device.device_id}: Pool updated to {new_status} via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    data = f"device_data,sensor={sensor_tag},source=simulator status_i={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
@@ -359,7 +359,7 @@ class TelemetryPublisher:
                     telemetry = json.dumps({"status": new_status})
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
                     print(f"Device {device.device_id}: Irrigation updated to {new_status} via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    data = f"device_data,sensor={sensor_tag},source=simulator status_i={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
@@ -393,7 +393,7 @@ class TelemetryPublisher:
                     response_topic = msg.topic.replace("request", "response")
                     await self.mqtt_client.publish(response_topic, telemetry)
                     print(f"Device {device.device_id}: Sent AirConditioner checkStatus via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator temperature={temperature},humidity={humidity},status={int(status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    data = f"device_data,sensor={sensor_tag},source=simulator temperature={temperature},humidity={humidity},status_i={int(status)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
@@ -410,7 +410,7 @@ class TelemetryPublisher:
                     telemetry = json.dumps(device.state)
                     await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
                     print(f"Device {device.device_id}: AirConditioner status updated to {new_status} via RPC")
-                    data = f"device_data,sensor={sensor_tag},source=simulator status={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
+                    data = f"device_data,sensor={sensor_tag},source=simulator status_i={int(new_status)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
                         await send_influx(data)
                     else:
@@ -536,24 +536,24 @@ class TelemetryPublisher:
                 status = state.get("status", False)
                 temperature = state.get("temperature", 0)
                 humidity = state.get("humidity", 0)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},temperature={temperature},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status_i={int(status)},temperature={temperature},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["led", "lightbulb"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status_i={int(status)},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["soilhumidity sensor", "soil humidity sensor"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
                 humidity = state.get("humidity", 0)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status_i={int(status)},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["pump", "pool", "irrigation"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status_i={int(status)},sent_timestamp={timestamp} {timestamp}"
             else:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={int(status)},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator status_i={int(status)},sent_timestamp={timestamp} {timestamp}"
             # use helper that prints device fields and the payload
             try:
                 status_code, text = await post_to_influx(session, data, device=device_obj)
