@@ -91,6 +91,25 @@ async def post_to_influx(session, data, device=None):
 
 DEVICE_STATE = defaultdict(dict)
 
+
+class InMemoryDeviceProxy:
+    """A tiny proxy used when the simulator runs with --memory.
+    It exposes .state and a sync .save() that updates the global DEVICE_STATE
+    so existing code that calls device.state and sync_to_async(device.save)()
+    continues to work without hitting AttributeError on None.
+    """
+    def __init__(self, device_id):
+        self.device_id = device_id
+        # Ensure a dict exists for this device
+        if device_id not in DEVICE_STATE:
+            DEVICE_STATE[device_id] = {}
+        # keep a reference so updates are reflected in DEVICE_STATE
+        self.state = DEVICE_STATE[device_id]
+
+    def save(self):
+        # Persist current state back to the global dict (no-op if same object)
+        DEVICE_STATE[self.device_id] = self.state
+
 class TelemetryPublisher:
     """
     Represents a device that connects via MQTT to ThingsBoard, sends
@@ -282,8 +301,10 @@ class TelemetryPublisher:
             # Initialize local device_type with fallback to self.device_type so it's always defined
             device_type = self.device_type
             if self.use_memory:
+                # Use an in-memory proxy so existing code that expects a Device
+                # object with .state and .save() continues to work.
                 state = DEVICE_STATE[device_id]
-                device = None
+                device = InMemoryDeviceProxy(device_id)
             else:
                 device = await sync_to_async(Device.objects.get)(pk=self.device_pk)
                 await sync_to_async(device.refresh_from_db)()
