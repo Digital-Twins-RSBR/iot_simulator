@@ -50,17 +50,16 @@ def send_in_background(cmd):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--device-id", type=int, required=True)
     ap.add_argument("--scenario-file", required=True)
     ap.add_argument("--rate", type=float, default=1.0)
     args = ap.parse_args()
 
     base_cmd = [sys.executable, "manage.py", "send_telemetry",
-                "--use-influx", f"--device-id={args.device_id}", "--randomize"]
+                "--use-influx", "--randomize"]
 
     intervals = load_intervals(args.scenario_file)
     t0 = time.time()
-    print(f"[{time.strftime('%H:%M:%S')}] ▶️  Executando {len(intervals)} intervalos para device {args.device_id}")
+    print(f"[{time.strftime('%H:%M:%S')}] ▶️  Executando {len(intervals)} intervalos para devices")
 
     try:
         for start, end, status, stage in intervals:
