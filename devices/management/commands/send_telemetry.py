@@ -543,6 +543,21 @@ class TelemetryPublisher:
         try:
             await self.mqtt_client.publish(topic, payload)
             print(f"Published RPC response to {topic}: {payload}")
+            
+            # Log the response timestamp for M2S latency measurement
+            try:
+                response_timestamp = int(time.time() * 1000)
+                raw_token = getattr(self, 'thingsboard_id', None)
+                if raw_token:
+                    sensor_tag = str(raw_token).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
+                    # Write M2S received_timestamp to InfluxDB for latency calculation
+                    influx_data = f"device_data,sensor={sensor_tag},source=simulator_response received_timestamp={response_timestamp} {response_timestamp}"
+                    await post_to_influx(self.session, influx_data, None)
+            except Exception:
+                # Swallow logging errors to avoid affecting RPC response
+                import traceback
+                traceback.print_exc()
+            
             return True
         except Exception as e:
             print(f"Publish RPC response failed for {topic}: {e}; attempting reconnect and retry...")
@@ -551,6 +566,21 @@ class TelemetryPublisher:
                 await self.connect()
                 await self.mqtt_client.publish(topic, payload)
                 print(f"Published RPC response to {topic} after reconnect: {payload}")
+                
+                # Log the response timestamp for M2S latency measurement (retry case)
+                try:
+                    response_timestamp = int(time.time() * 1000)
+                    raw_token = getattr(self, 'thingsboard_id', None)
+                    if raw_token:
+                        sensor_tag = str(raw_token).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
+                        # Write M2S received_timestamp to InfluxDB for latency calculation
+                        influx_data = f"device_data,sensor={sensor_tag},source=simulator_response received_timestamp={response_timestamp} {response_timestamp}"
+                        await post_to_influx(self.session, influx_data, None)
+                except Exception:
+                    # Swallow logging errors to avoid affecting RPC response
+                    import traceback
+                    traceback.print_exc()
+                
                 return True
             except Exception as e2:
                 print(f"Failed to publish RPC response after reconnect for {topic}: {e2}")
