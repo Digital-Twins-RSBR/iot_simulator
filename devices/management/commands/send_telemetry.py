@@ -181,7 +181,7 @@ class TelemetryPublisher:
         # não aceitaram conexões no momento inicial.
         # Persistent connect: keep retrying until ThingsBoard accepts the TCP/MQTT connection
         delay = 1
-        timeout_per_attempt = 10
+        timeout_per_attempt = 10  # Keep default timeout to avoid premature failures
         attempt = 0
         while True:
             attempt += 1
@@ -189,16 +189,20 @@ class TelemetryPublisher:
                 self._mqtt_context = self.mqtt_client.__aenter__()
                 await asyncio.wait_for(self._mqtt_context, timeout=timeout_per_attempt)
                 # Se conectou, subscribe e continue
+                print(f"[MQTT CONNECT] Device {self.token} connected to MQTT broker")
                 await self.mqtt_client.subscribe("v1/devices/me/rpc/request/+")
+                print(f"[MQTT SUBSCRIBE] Device {self.token} subscribed to RPC topic: v1/devices/me/rpc/request/+")
                 # Only spawn a handle_rpc task if requested and not already running
                 try:
                     if spawn_handle:
                         if not hasattr(self, '_rpc_task') or self._rpc_task.done():
                             self._rpc_task = asyncio.create_task(self.handle_rpc())
-                except Exception:
+                            print(f"[MQTT HANDLER] Device {self.token} started RPC handler task")
+                except Exception as e:
+                    print(f"[MQTT HANDLER ERROR] Device {self.token}: {e}")
                     # If task creation fails, continue; handle_rpc will be invoked on next successful connect
                     pass
-                print(f"[mqtt] connected to {THINGSBOARD_HOST}:{THINGSBOARD_MQTT_PORT} on attempt {attempt}")
+                print(f"[mqtt] Device {self.token} connected to {THINGSBOARD_HOST}:{THINGSBOARD_MQTT_PORT} on attempt {attempt}")
                 return True
             except asyncio.TimeoutError:
                 print(f"[mqtt] connect attempt {attempt} timed out after {timeout_per_attempt}s; retrying in {delay}s")
@@ -253,12 +257,13 @@ class TelemetryPublisher:
     async def on_message(self, msg):
         # Normalize topic to string (aiomqtt may provide a Topic object)
         topic_str = str(msg.topic)
-        print(f"Device {self.token}: Message received on topic {topic_str}: {msg.payload.decode()}")
+        print(f"[MQTT RECEIVED] Device {self.token}: Message on topic {topic_str}: {msg.payload.decode()}")
 
         # Parse payload safely
         try:
             payload = json.loads(msg.payload.decode())
-        except Exception:
+        except Exception as e:
+            print(f"[MQTT ERROR] Failed to parse JSON: {e}")
             payload = {}
         method = payload.get("method")
         params = payload.get("params")
@@ -272,6 +277,26 @@ class TelemetryPublisher:
         device_id = self.device_id
         try:
             received_timestamp = int(time.time() * 1000)
+            print(f"[M2S RPC RECEIVED] device={device_id}, method={method}, timestamp={received_timestamp}, request_id={request_id}")
+
+            # Write M2S received_timestamp to InfluxDB for ODTE latency measurement
+            try:
+                raw_token = getattr(self, 'thingsboard_id', None)
+                print(f"[M2S INFLUX] raw_token={raw_token}, session={self.session is not None}")
+                
+                if raw_token and self.session:
+                    sensor_tag = str(raw_token).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
+                    # Write M2S received_timestamp to latency_measurement using source=simulator
+                    # Use only numeric fields to avoid InfluxDB type conflicts
+                    influx_data = f"latency_measurement,sensor={sensor_tag},source=simulator received_timestamp={received_timestamp} {received_timestamp}"
+                    await post_to_influx(self.session, influx_data, None)
+                    print(f"[M2S] Simulator received RPC {method} at {received_timestamp} - written to InfluxDB")
+                else:
+                    print(f"[DEBUG M2S] Skipping InfluxDB write: raw_token={raw_token}, session={self.session is not None}")
+            except Exception as e:
+                print(f"[M2S] Failed to write received_timestamp to InfluxDB: {e}")
+                import traceback
+                traceback.print_exc()
 
             # Log RPC reception to deploy/logs/simulator_rpc_received.log for auditing
             try:
@@ -296,6 +321,21 @@ class TelemetryPublisher:
             except Exception:
                 # Swallow logging errors to avoid affecting RPC handling
                 pass
+
+            # Write M2S received_timestamp to InfluxDB for latency calculation
+            try:
+                raw_token = getattr(self, 'thingsboard_id', None)
+                if raw_token and hasattr(self, 'session') and self.session:
+                    sensor_tag = str(raw_token).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
+                    # Write to latency_measurement table with direction=M2S for matching with sent_timestamp
+                    influx_data = f"latency_measurement,sensor={sensor_tag},direction=M2S received_timestamp={received_timestamp},request_id=\"{request_id}\",method=\"{method}\" {received_timestamp}"
+                    await post_to_influx(self.session, influx_data, None)
+                    print(f"[M2S] Recorded received_timestamp {received_timestamp} for {sensor_tag} method {method}")
+            except Exception as e:
+                # Swallow InfluxDB errors to avoid affecting RPC handling
+                print(f"[M2S] Failed to write received_timestamp: {e}")
+                import traceback
+                traceback.print_exc()
 
             # Use armazenamento em memória ou banco conforme o modo
             # Initialize local device_type with fallback to self.device_type so it's always defined
@@ -651,15 +691,17 @@ class TelemetryPublisher:
             else:
                 telemetry = json.dumps(DEVICE_STATE[device_id] if self.use_memory else state)
 
+        # Capture S2M sent_timestamp precisely when telemetry is sent
+        sent_timestamp = int(time.time() * 1000)
         await self.publish(telemetry)
-        print(f"Device {device_id}: Telemetry sent: {telemetry}")
+        print(f"Device {device_id}: Telemetry sent: {telemetry} at {sent_timestamp}")
 
         if use_influxdb and session is not None:
             headers = {
                 "Authorization": f"Token {INFLUXDB_TOKEN}",
                 "Content-Type": "text/plain",
             }
-            timestamp = int(time.time() * 1000)
+            timestamp = sent_timestamp  # Use precise sent_timestamp
             # determine sensor tag from token and sanitize
             device_obj = None
             try:
@@ -676,24 +718,24 @@ class TelemetryPublisher:
                 status = state.get("status", False)
                 temperature = state.get("temperature", 0)
                 humidity = state.get("humidity", 0)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if status else 0.0)},temperature={temperature},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator,direction=S2M status={float(1.0 if status else 0.0)},temperature={temperature},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["led", "lightbulb"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if status else 0.0)},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator,direction=S2M status={float(1.0 if status else 0.0)},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["soilhumidity sensor", "soil humidity sensor"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
                 humidity = state.get("humidity", 0)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if status else 0.0)},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator,direction=S2M status={float(1.0 if status else 0.0)},humidity={humidity},sent_timestamp={timestamp} {timestamp}"
             elif device_type in ["pump", "pool", "irrigation"]:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if status else 0.0)},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator,direction=S2M status={float(1.0 if status else 0.0)},sent_timestamp={timestamp} {timestamp}"
             else:
                 state = DEVICE_STATE[device_id] if self.use_memory else state
                 status = state.get("status", False)
-                data = f"device_data,sensor={sensor_tag},source=simulator status={float(1.0 if status else 0.0)},sent_timestamp={timestamp} {timestamp}"
+                data = f"device_data,sensor={sensor_tag},source=simulator,direction=S2M status={float(1.0 if status else 0.0)},sent_timestamp={timestamp} {timestamp}"
             # use helper that prints device fields and the payload
             try:
                 status_code, text = await post_to_influx(session, data, device=device_obj)
