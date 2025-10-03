@@ -150,4 +150,15 @@ THINGSBOARD_MQTT_PORT = int(os.getenv('THINGSBOARD_MQTT_PORT', '1883'))
 THINGSBOARD_MQTT_KEEP_ALIVE = int(os.getenv('THINGSBOARD_MQTT_KEEP_ALIVE', '60'))
 HEARTBEAT_INTERVAL = int(os.getenv('HEARTBEAT_INTERVAL', '5'))
 
+# URLLC Optimized Settings
+URLLC_MODE = os.getenv('URLLC_MODE', 'False').lower() in ('1', 'true', 'yes')
+URLLC_HEARTBEAT_INTERVAL = int(os.getenv('URLLC_HEARTBEAT_INTERVAL', '2'))  # Faster for URLLC
+URLLC_MQTT_TIMEOUT = int(os.getenv('URLLC_MQTT_TIMEOUT', '5'))  # Lower timeout
+URLLC_HTTP_TIMEOUT = int(os.getenv('URLLC_HTTP_TIMEOUT', '3'))  # Lower HTTP timeout
+
+# Apply URLLC settings if enabled
+if URLLC_MODE:
+    HEARTBEAT_INTERVAL = URLLC_HEARTBEAT_INTERVAL
+    print(f"[URLLC] Optimized settings applied: heartbeat={HEARTBEAT_INTERVAL}s, mqtt_timeout={URLLC_MQTT_TIMEOUT}s")
+
 ALLOW_THINGSBOARD_DELETE = os.getenv('ALLOW_THINGSBOARD_DELETE', 'True').lower() in ('1', 'true', 'yes')
