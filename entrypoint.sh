@@ -28,15 +28,15 @@ except FileNotFoundError:
 found = False
 for i,l in enumerate(lines):
 	if l.startswith('THINGSBOARD_HOST='):
-		lines[i] = 'THINGSBOARD_HOST=http://10.0.0.11:8080\n'
+		lines[i] = 'THINGSBOARD_HOST=http://10.0.0.2:8080\n'
 		found = True
 if not found:
-	lines.append('THINGSBOARD_HOST=http://10.0.0.11:8080\n')
+	lines.append('THINGSBOARD_HOST=http://10.0.0.2:8080\n')
 with open(p, 'w', encoding='utf-8') as f:
 	f.writelines(lines)
 PY
 else
-	echo "THINGSBOARD_HOST=http://10.0.0.11:8080" >> "$ENV_FILE"
+	echo "THINGSBOARD_HOST=http://10.0.0.2:8080" >> "$ENV_FILE"
 fi
 
 # Garante usuário/senha padrão
@@ -127,7 +127,7 @@ python manage.py collectstatic --noinput || true
 # Aguardar o ThingsBoard estar acessível antes de renomear e iniciar telemetria
 echo "Aguardando ThingsBoard responder no endpoint /api/auth/login..."
 # hardcoded IP conforme convenção do projeto
-TB_URL="http://10.0.0.11:8080/api/auth/login"
+TB_URL="http://10.0.0.2:8080/api/auth/login"
 # Try briefly for ThingsBoard; if still unreachable, continue and let send_telemetry
 # do the active reconciliation/retry. This avoids simulators stuck forever when network
 # to TB is temporarily unavailable.
