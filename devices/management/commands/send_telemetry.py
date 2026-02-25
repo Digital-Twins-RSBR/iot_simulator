@@ -641,7 +641,10 @@ class TelemetryPublisher:
 
         if self.randomize:
             if device_type in self.LIGHTS:
-                new_status = bool(random.getrandbits(1))
+                # OPTIMIZATION: Toggle status instead of random to ensure each message differs
+                # This prevents middleware deduplication of identical consecutive values
+                current_status = state.get('status', False) if isinstance(state, dict) else False
+                new_status = not current_status  # Toggle: on→off, off→on
                 if self.use_memory:
                     DEVICE_STATE[device_id]['status'] = new_status
                 else:
@@ -649,9 +652,19 @@ class TelemetryPublisher:
                     await sync_to_async(device.save)()
                 telemetry = json.dumps({"status": new_status})
             elif device_type in self.AIR_CONDITIONER + self.TEMPERATURE_SENSOR:
-                temperature = round(random.uniform(16, 28), 2)
-                humidity = round(random.uniform(50, 80), 2)
-                status = bool(random.getrandbits(1))
+                # For continuous properties, vary slightly instead of full random
+                # This ensures different values in each message (prevents deduplication)
+                current_temp = state.get('temperature', 20.0) if isinstance(state, dict) else 20.0
+                current_humidity = state.get('humidity', 60.0) if isinstance(state, dict) else 60.0
+                # Small variation (±0.5°C, ±2% RH) instead of full random range
+                temperature = round(current_temp + random.uniform(-0.5, 0.5), 2)
+                humidity = round(current_humidity + random.uniform(-2, 2), 2)
+                # Clamp to reasonable ranges
+                temperature = max(16.0, min(28.0, temperature))
+                humidity = max(50.0, min(80.0, humidity))
+                # Toggle boolean status property
+                current_status = state.get('status', False) if isinstance(state, dict) else False
+                status = not current_status
                 if self.use_memory:
                     DEVICE_STATE[device_id] = {"temperature": temperature, "humidity": humidity, "status": status}
                 else:
@@ -659,7 +672,9 @@ class TelemetryPublisher:
                     await sync_to_async(device.save)()
                 telemetry = json.dumps({"temperature": temperature, "humidity": humidity, "status": status})
             elif device_type in self.PUMP:
-                status = bool(random.getrandbits(1))
+                # Toggle pump status to ensure each message differs
+                current_status = state.get('status', False) if isinstance(state, dict) else False
+                status = not current_status
                 if self.use_memory:
                     DEVICE_STATE[device_id]['status'] = status
                 else:
@@ -667,7 +682,9 @@ class TelemetryPublisher:
                     await sync_to_async(device.save)()
                 telemetry = json.dumps({"status": status})
             elif device_type in self.POOL:
-                status = bool(random.getrandbits(1))
+                # Toggle pool status to ensure each message differs
+                current_status = state.get('status', False) if isinstance(state, dict) else False
+                status = not current_status
                 if self.use_memory:
                     DEVICE_STATE[device_id]['status'] = status
                 else:
@@ -675,7 +692,9 @@ class TelemetryPublisher:
                     await sync_to_async(device.save)()
                 telemetry = json.dumps({"status": status})
             elif device_type in self.IRRIGATION:
-                status = bool(random.getrandbits(1))
+                # Toggle irrigation status to ensure each message differs
+                current_status = state.get('status', False) if isinstance(state, dict) else False
+                status = not current_status
                 if self.use_memory:
                     DEVICE_STATE[device_id]['status'] = status
                 else:
