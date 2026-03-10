@@ -1,6 +1,7 @@
 import time
 import json
 import random
+import os
 import asyncio
 import aiohttp
 import aiomqtt
@@ -255,9 +256,15 @@ class TelemetryPublisher:
                 continue
 
     async def on_message(self, msg):
+        sim_fast_mode = os.getenv("M2S_SIMULATOR_FAST_MODE", "0").lower() in ("1", "true", "yes")
+        sim_timestamps_only = os.getenv("M2S_SIMULATOR_TIMESTAMPS_ONLY", "0").lower() in ("1", "true", "yes")
+        sim_full_perf = os.getenv("M2S_SIMULATOR_PERF_FULL", "0").lower() in ("1", "true", "yes")
+        disable_simulator_rpc_influx = os.getenv("M2S_DISABLE_SIMULATOR_RPC_INFLUX", "0").lower() in ("1", "true", "yes") or sim_full_perf
+
         # Normalize topic to string (aiomqtt may provide a Topic object)
         topic_str = str(msg.topic)
-        print(f"[MQTT RECEIVED] Device {self.token}: Message on topic {topic_str}: {msg.payload.decode()}")
+        if not sim_fast_mode:
+            print(f"[MQTT RECEIVED] Device {self.token}: Message on topic {topic_str}: {msg.payload.decode()}")
 
         # Parse payload safely
         try:
@@ -277,28 +284,33 @@ class TelemetryPublisher:
         device_id = self.device_id
         try:
             received_timestamp = int(time.time() * 1000)
-            print(f"[M2S RPC RECEIVED] device={device_id}, method={method}, timestamp={received_timestamp}, request_id={request_id}")
+            if not sim_fast_mode:
+                print(f"[M2S RPC RECEIVED] device={device_id}, method={method}, timestamp={received_timestamp}, request_id={request_id}")
 
             # Padronizar: sempre incluir direction=M2S, source=simulator e request_id (se disponível)
             try:
                 raw_token = getattr(self, 'thingsboard_id', None)
-                print(f"[M2S INFLUX] raw_token={raw_token}, session={self.session is not None}")
-                if raw_token and self.session:
+                if not sim_fast_mode:
+                    print(f"[M2S INFLUX] raw_token={raw_token}, session={self.session is not None}")
+                if (not disable_simulator_rpc_influx) and raw_token and self.session:
                     sensor_tag = str(raw_token).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
                     influx_tags = f"sensor={sensor_tag},source=simulator,direction=M2S"
                     if request_id:
                         influx_tags += f",request_id=\"{request_id}\""
                     influx_data = f"latency_measurement,{influx_tags} received_timestamp={received_timestamp} {received_timestamp}"
                     await post_to_influx(self.session, influx_data, None)
-                    print(f"[M2S] Simulator received RPC {method} at {received_timestamp} - written to InfluxDB (direction=M2S, source=simulator, request_id={request_id})")
-                    # Também registra received_timestamp em device_data para pareamento S2M/M2S
-                    influx_tags_device = f"sensor={sensor_tag},source=simulator,direction=M2S"
-                    if request_id:
-                        influx_tags_device += f",request_id=\"{request_id}\""
-                    influx_data_device = f"device_data,{influx_tags_device} received_timestamp={received_timestamp} {received_timestamp}"
-                    await post_to_influx(self.session, influx_data_device, None)
-                    print(f"[M2S] Simulator also wrote received_timestamp to device_data (direction=M2S, request_id={request_id})")
-                else:
+                    if not sim_fast_mode:
+                        print(f"[M2S] Simulator received RPC {method} at {received_timestamp} - written to InfluxDB (direction=M2S, source=simulator, request_id={request_id})")
+                    # In timestamps-only mode, keep only strict timing data and skip extra device_data writes.
+                    if not sim_timestamps_only:
+                        influx_tags_device = f"sensor={sensor_tag},source=simulator,direction=M2S"
+                        if request_id:
+                            influx_tags_device += f",request_id=\"{request_id}\""
+                        influx_data_device = f"device_data,{influx_tags_device} received_timestamp={received_timestamp} {received_timestamp}"
+                        await post_to_influx(self.session, influx_data_device, None)
+                        if not sim_fast_mode:
+                            print(f"[M2S] Simulator also wrote received_timestamp to device_data (direction=M2S, request_id={request_id})")
+                elif not sim_fast_mode:
                     print(f"[DEBUG M2S] Skipping InfluxDB write: raw_token={raw_token}, session={self.session is not None}")
             except Exception as e:
                 print(f"[M2S] Failed to write received_timestamp to InfluxDB: {e}")
@@ -306,27 +318,28 @@ class TelemetryPublisher:
                 traceback.print_exc()
 
             # Log RPC reception to deploy/logs/simulator_rpc_received.log for auditing
-            try:
-                import pathlib, getpass
-                log_dir = pathlib.Path(__file__).resolve().parents[3] / 'deploy' / 'logs'
-                log_dir.mkdir(parents=True, exist_ok=True)
-                recv_log = log_dir / 'simulator_rpc_received.log'
-                # Mask token for privacy (show first 6 chars)
-                masked = (self.token[:6] + '...') if getattr(self, 'token', None) else None
-                recv_entry = {
-                    'ts': received_timestamp,
-                    'device_id': device_id,
-                    'thingsboard_id': getattr(self, 'thingsboard_id', None),
-                    'masked_token': masked,
-                    'request_id': request_id,
-                    'method': method,
-                    'params': params,
-                    'topic': topic_str
-                }
-                with recv_log.open('a') as rf:
-                    rf.write(json.dumps(recv_entry) + '\n')
-            except Exception:
-                pass
+            if not sim_fast_mode:
+                try:
+                    import pathlib, getpass
+                    log_dir = pathlib.Path(__file__).resolve().parents[3] / 'deploy' / 'logs'
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    recv_log = log_dir / 'simulator_rpc_received.log'
+                    # Mask token for privacy (show first 6 chars)
+                    masked = (self.token[:6] + '...') if getattr(self, 'token', None) else None
+                    recv_entry = {
+                        'ts': received_timestamp,
+                        'device_id': device_id,
+                        'thingsboard_id': getattr(self, 'thingsboard_id', None),
+                        'masked_token': masked,
+                        'request_id': request_id,
+                        'method': method,
+                        'params': params,
+                        'topic': topic_str
+                    }
+                    with recv_log.open('a') as rf:
+                        rf.write(json.dumps(recv_entry) + '\n')
+                except Exception:
+                    pass
 
             # Use armazenamento em memória ou banco conforme o modo
             # Initialize local device_type with fallback to self.device_type so it's always defined
@@ -534,10 +547,11 @@ class TelemetryPublisher:
                 if method == "switchStatus":
                     new_status = bool(params)
                     current_state = device.state or {}
+                    # Prepare influx tags before state dict
+                    influx_tags = f"sensor={sensor_tag},source=simulator,direction=M2S"
+                    if request_id:
+                        influx_tags += f",request_id=\"{request_id}\""
                     device.state = {
-                            influx_tags = f"sensor={sensor_tag},source=simulator,direction=M2S"
-                            if request_id:
-                                influx_tags += f",request_id=\"{request_id}\""
                         "humidity": current_state.get("humidity", 50.0),
                         "status": new_status
                     }
@@ -620,10 +634,7 @@ class TelemetryPublisher:
                         await post_to_influx(self.session, influx_data, None)
                 except Exception:
                     # Swallow logging errors to avoid affecting RPC response
-                            influx_tags = f"sensor={sensor_tag},source=simulator"
-                            if request_id:
-                                influx_tags += f",request_id=\"{request_id}\""
-                            data = f"device_data,{influx_tags} status={float(1.0 if new_status else 0.0)},received_timestamp={received_timestamp} {received_timestamp}"
+                    import traceback
                     traceback.print_exc()
                 
                 return True
@@ -664,10 +675,6 @@ class TelemetryPublisher:
                 # Small variation (±0.5°C, ±2% RH) instead of full random range
                 temperature = round(current_temp + random.uniform(-0.5, 0.5), 2)
                 humidity = round(current_humidity + random.uniform(-2, 2), 2)
-                            influx_tags = f"sensor={sensor_tag},source=simulator"
-                            if request_id:
-                                influx_tags += f",request_id=\"{request_id}\""
-                            data = f"device_data,{influx_tags} temperature={temperature},received_timestamp={received_timestamp} {received_timestamp}"
                 temperature = max(16.0, min(28.0, temperature))
                 humidity = max(50.0, min(80.0, humidity))
                 # Toggle boolean status property
@@ -685,10 +692,7 @@ class TelemetryPublisher:
                 status = not current_status
                 if self.use_memory:
                     DEVICE_STATE[device_id]['status'] = status
-                            influx_tags = f"sensor={sensor_tag},source=simulator"
-                            if request_id:
-                                influx_tags += f",request_id=\"{request_id}\""
-                            data = f"device_data,{influx_tags} humidity={humidity},received_timestamp={received_timestamp} {received_timestamp}"
+                else:
                     device.state = {"status": status}
                     await sync_to_async(device.save)()
                 telemetry = json.dumps({"status": status})
@@ -737,23 +741,29 @@ class TelemetryPublisher:
         else:
             properties = list(telemetry_dict.keys())
 
+        # Use one correlation_id/timestamp per published telemetry message
+        message_request_id = str(__import__('uuid').uuid4())
+        message_sent_timestamp = int(time.time() * 1000)
+
         for prop in properties:
             prop_value = telemetry_dict.get(prop)
-            prop_request_id = str(__import__('uuid').uuid4())
-            prop_sent_timestamp = int(time.time() * 1000)
             # Atualiza o payload para envio MQTT (apenas para o primeiro registro)
             if prop == properties[0]:
-                telemetry_dict["request_id"] = prop_request_id
+                telemetry_dict["request_id"] = message_request_id
+                telemetry_dict["sent_timestamp"] = message_sent_timestamp
                 await self.publish(json.dumps(telemetry_dict))
-                print(f"Device {device_id}: Telemetry sent: {telemetry_dict} at {prop_sent_timestamp} (request_id={prop_request_id})")
+                print(f"Device {device_id}: Telemetry sent: {telemetry_dict} at {message_sent_timestamp} (request_id={message_request_id})")
             if use_influxdb and session is not None:
                 raw_token = getattr(self, 'thingsboard_id', None)
                 if raw_token:
                     sensor_tag = str(raw_token).replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
                 else:
                     sensor_tag = None
-                influx_tags = f"sensor={sensor_tag},source=simulator,direction=S2M,request_id=\"{prop_request_id}\""
-                data = f"device_data,{influx_tags} {prop}={prop_value},sent_timestamp={prop_sent_timestamp} {prop_sent_timestamp}"
+                influx_tags = (
+                    f"sensor={sensor_tag},source=simulator,direction=S2M,"
+                    f"request_id=\"{message_request_id}\",correlation_id={message_request_id}"
+                )
+                data = f"device_data,{influx_tags} {prop}={prop_value},sent_timestamp={message_sent_timestamp} {message_sent_timestamp}"
                 try:
                     device_obj = None
                     try:
