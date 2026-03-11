@@ -298,7 +298,7 @@ class TelemetryPublisher:
                     if request_id:
                         influx_tags += f",request_id=\"{request_id}\""
                     influx_data = f"latency_measurement,{influx_tags} received_timestamp={received_timestamp} {received_timestamp}"
-                    await post_to_influx(self.session, influx_data, None)
+                    asyncio.ensure_future(post_to_influx(self.session, influx_data, None))
                     if not sim_fast_mode:
                         print(f"[M2S] Simulator received RPC {method} at {received_timestamp} - written to InfluxDB (direction=M2S, source=simulator, request_id={request_id})")
                     # In timestamps-only mode, keep only strict timing data and skip extra device_data writes.
@@ -307,7 +307,7 @@ class TelemetryPublisher:
                         if request_id:
                             influx_tags_device += f",request_id=\"{request_id}\""
                         influx_data_device = f"device_data,{influx_tags_device} received_timestamp={received_timestamp} {received_timestamp}"
-                        await post_to_influx(self.session, influx_data_device, None)
+                        asyncio.ensure_future(post_to_influx(self.session, influx_data_device, None))
                         if not sim_fast_mode:
                             print(f"[M2S] Simulator also wrote received_timestamp to device_data (direction=M2S, request_id={request_id})")
                 elif not sim_fast_mode:
@@ -363,7 +363,7 @@ class TelemetryPublisher:
             async def send_influx(data, device_obj=None):
                 # helper: forward to shared post_to_influx, prefer explicit device_obj when provided
                 try:
-                    await post_to_influx(self.session, data, device_obj if device_obj is not None else device)
+                    asyncio.ensure_future(post_to_influx(self.session, data, device_obj if device_obj is not None else device))
                 except Exception:
                     # swallow to avoid breaking RPC handling
                     import traceback
@@ -537,7 +537,7 @@ class TelemetryPublisher:
                     device.state = new_state
                     await sync_to_async(device.save)()
                     telemetry = json.dumps(new_state)
-                    await self.mqtt_client.publish(response_topic, telemetry)
+                    await self.publish_rpc_response(response_topic, telemetry)
                     print(f"Device {device_id}: Sent AirConditioner checkStatus via RPC")
                     data = f"device_data,sensor={sensor_tag},source=simulator temperature={temperature},humidity={humidity},status={float(1.0 if status else 0.0)},received_timestamp={received_timestamp} {received_timestamp}"
                     if sensor_tag:
@@ -552,6 +552,7 @@ class TelemetryPublisher:
                     if request_id:
                         influx_tags += f",request_id=\"{request_id}\""
                     device.state = {
+                        "temperature": current_state.get("temperature", 24.0),
                         "humidity": current_state.get("humidity", 50.0),
                         "status": new_status
                     }
@@ -564,7 +565,29 @@ class TelemetryPublisher:
                         await send_influx(data)
                     else:
                         print(f"Skipping Influx write: device {device_id} has no token")
-                    await self.mqtt_client.publish(response_topic, json.dumps({"status": new_status}))
+                    await self.publish_rpc_response(response_topic, json.dumps({"status": new_status}))
+                if method == "setTemperature":
+                    try:
+                        new_temperature = float(params)
+                    except Exception:
+                        new_temperature = 24.0
+                    current_state = device.state or {}
+                    new_temperature = max(0.0, min(50.0, new_temperature))
+                    device.state = {
+                        "temperature": new_temperature,
+                        "humidity": current_state.get("humidity", 50.0),
+                        "status": current_state.get("status", False),
+                    }
+                    await sync_to_async(device.save)()
+                    telemetry = json.dumps(device.state)
+                    await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
+                    print(f"Device {device_id}: AirConditioner temperature updated to {new_temperature} via RPC")
+                    data = f"device_data,sensor={sensor_tag},source=simulator temperature={new_temperature},received_timestamp={received_timestamp} {received_timestamp}"
+                    if sensor_tag:
+                        await send_influx(data)
+                    else:
+                        print(f"Skipping Influx write: device {device_id} has no token")
+                    await self.publish_rpc_response(response_topic, json.dumps({"temperature": new_temperature}))
             else:
                 print(f"Device {device_id}: Unsupported device type for RPC.")
         except Exception as e:
