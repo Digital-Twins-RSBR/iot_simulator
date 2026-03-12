@@ -54,6 +54,7 @@ DEVICE_RPC_METADATA = {
             },
             "humidity": {
                 "rpc_read_method": "checkStatus",
+                "rpc_write_method": "setHumidity",
                 "type": "Double"
             },
             "status": {
