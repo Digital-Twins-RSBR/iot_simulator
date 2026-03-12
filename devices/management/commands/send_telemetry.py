@@ -547,6 +547,7 @@ class TelemetryPublisher:
                 if method == "switchStatus":
                     new_status = bool(params)
                     current_state = device.state or {}
+                    print(f"[SIM-RPC] device={device_id} method=switchStatus request_id={request_id} sensor={sensor_tag} status_in={params}")
                     # Prepare influx tags before state dict
                     influx_tags = f"sensor={sensor_tag},source=simulator,direction=M2S"
                     if request_id:
@@ -565,12 +566,14 @@ class TelemetryPublisher:
                         await send_influx(data)
                     else:
                         print(f"Skipping Influx write: device {device_id} has no token")
+                    print(f"[SIM-RPC] device={device_id} method=switchStatus request_id={request_id} publishing_response={new_status}")
                     await self.publish_rpc_response(response_topic, json.dumps({"status": new_status}))
                 if method == "setTemperature":
                     try:
                         new_temperature = float(params)
                     except Exception:
                         new_temperature = 24.0
+                    print(f"[SIM-RPC] device={device_id} method=setTemperature request_id={request_id} sensor={sensor_tag} temp_in={params}")
                     current_state = device.state or {}
                     new_temperature = max(0.0, min(50.0, new_temperature))
                     device.state = {
@@ -587,7 +590,32 @@ class TelemetryPublisher:
                         await send_influx(data)
                     else:
                         print(f"Skipping Influx write: device {device_id} has no token")
+                    print(f"[SIM-RPC] device={device_id} method=setTemperature request_id={request_id} publishing_response={new_temperature}")
                     await self.publish_rpc_response(response_topic, json.dumps({"temperature": new_temperature}))
+                if method == "setHumidity":
+                    try:
+                        new_humidity = float(params)
+                    except Exception:
+                        new_humidity = 50.0
+                    print(f"[SIM-RPC] device={device_id} method=setHumidity request_id={request_id} sensor={sensor_tag} humidity_in={params}")
+                    current_state = device.state or {}
+                    new_humidity = max(0.0, min(100.0, new_humidity))
+                    device.state = {
+                        "temperature": current_state.get("temperature", 24.0),
+                        "humidity": new_humidity,
+                        "status": current_state.get("status", False),
+                    }
+                    await sync_to_async(device.save)()
+                    telemetry = json.dumps(device.state)
+                    await self.mqtt_client.publish("v1/devices/me/telemetry", telemetry)
+                    print(f"Device {device_id}: AirConditioner humidity updated to {new_humidity} via RPC")
+                    data = f"device_data,sensor={sensor_tag},source=simulator humidity={new_humidity},received_timestamp={received_timestamp} {received_timestamp}"
+                    if sensor_tag:
+                        await send_influx(data)
+                    else:
+                        print(f"Skipping Influx write: device {device_id} has no token")
+                    print(f"[SIM-RPC] device={device_id} method=setHumidity request_id={request_id} publishing_response={new_humidity}")
+                    await self.publish_rpc_response(response_topic, json.dumps({"humidity": new_humidity}))
             else:
                 print(f"Device {device_id}: Unsupported device type for RPC.")
         except Exception as e:
