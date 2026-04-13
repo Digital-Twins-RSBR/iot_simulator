@@ -6,6 +6,9 @@ set -e
 
 ENV_FILE="/iot_simulator/.env"
 ENV_EXAMPLE="/iot_simulator/.env.example"
+TB_HOST_VALUE="${THINGSBOARD_HOST:-http://thingsboard:8080}"
+TB_USER_VALUE="${THINGSBOARD_USER:-tenant@thingsboard.org}"
+TB_PASSWORD_VALUE="${THINGSBOARD_PASSWORD:-tenant}"
 
 # Copia .env se necessário
 if [ ! -f "$ENV_FILE" ] && [ -f "$ENV_EXAMPLE" ]; then
@@ -13,13 +16,14 @@ if [ ! -f "$ENV_FILE" ] && [ -f "$ENV_EXAMPLE" ]; then
 	cp "$ENV_EXAMPLE" "$ENV_FILE"
 fi
 
-# Garante THINGSBOARD_HOST correto
+# Garante THINGSBOARD_HOST conforme ambiente (sem hardcode de IP)
 if [ -f "$ENV_FILE" ] && grep -q '^THINGSBOARD_HOST=' "$ENV_FILE" 2>/dev/null; then
 		# Use Python to reliably replace the key in-place (some mounts don't support sed -i atomic rename)
 		# pass the target path as an arg so we don't need to interpolate into the heredoc
-		python3 - "$ENV_FILE" <<'PY'
+		python3 - "$ENV_FILE" "$TB_HOST_VALUE" <<'PY'
 import sys
 p = sys.argv[1]
+v = sys.argv[2]
 try:
 	with open(p, 'r', encoding='utf-8') as f:
 		lines = f.readlines()
@@ -28,23 +32,23 @@ except FileNotFoundError:
 found = False
 for i,l in enumerate(lines):
 	if l.startswith('THINGSBOARD_HOST='):
-		lines[i] = 'THINGSBOARD_HOST=http://10.0.0.2:8080\n'
+		lines[i] = f'THINGSBOARD_HOST={v}\n'
 		found = True
 if not found:
-	lines.append('THINGSBOARD_HOST=http://10.0.0.2:8080\n')
+	lines.append(f'THINGSBOARD_HOST={v}\n')
 with open(p, 'w', encoding='utf-8') as f:
 	f.writelines(lines)
 PY
 else
-	echo "THINGSBOARD_HOST=http://10.0.0.2:8080" >> "$ENV_FILE"
+	echo "THINGSBOARD_HOST=$TB_HOST_VALUE" >> "$ENV_FILE"
 fi
 
 # Garante usuário/senha padrão
 if ! grep -q '^THINGSBOARD_USER=' "$ENV_FILE" 2>/dev/null; then
-	echo "THINGSBOARD_USER=tenant@thingsboard.org" >> "$ENV_FILE"
+	echo "THINGSBOARD_USER=$TB_USER_VALUE" >> "$ENV_FILE"
 fi
 if ! grep -q '^THINGSBOARD_PASSWORD=' "$ENV_FILE" 2>/dev/null; then
-	echo "THINGSBOARD_PASSWORD=tenant" >> "$ENV_FILE"
+	echo "THINGSBOARD_PASSWORD=$TB_PASSWORD_VALUE" >> "$ENV_FILE"
 fi
 
 # Garante SECRET_KEY
@@ -79,9 +83,9 @@ if [ -f "$ENV_FILE" ]; then
 	fi
 fi
 
-# Corrige DJANGO_SETTINGS_MODULE se necessário
-if [ "${DJANGO_SETTINGS_MODULE}" = "iot_simulator.settings" ]; then
-	export DJANGO_SETTINGS_MODULE=iot_simulator.settings
+# Corrige DJANGO_SETTINGS_MODULE para o arquivo que existe no projeto
+if [ -z "${DJANGO_SETTINGS_MODULE}" ] || [ "${DJANGO_SETTINGS_MODULE}" = "iot_simulator.settings" ]; then
+	export DJANGO_SETTINGS_MODULE=iot_simulator.settings_base
 fi
 
 # Se não houver POSTGRES_HOST, usa sqlite e restaura DB
@@ -124,10 +128,32 @@ python manage.py migrate --noinput
 echo "Coletando arquivos estáticos..."
 python manage.py collectstatic --noinput || true
 
+# Create Django superuser for simulator if env vars present
+if [ -n "$SIMULATOR_SUPERUSER_USERNAME" ] && [ -n "$SIMULATOR_SUPERUSER_PASSWORD" ]; then
+	echo "[entrypoint] Ensuring simulator Django superuser $SIMULATOR_SUPERUSER_USERNAME exists"
+	python - <<PY
+import os
+import django
+django.setup()
+from django.contrib.auth import get_user_model
+User = get_user_model()
+username = os.getenv('SIMULATOR_SUPERUSER_USERNAME')
+email = os.getenv('SIMULATOR_SUPERUSER_EMAIL', 'simulator@example.com')
+password = os.getenv('SIMULATOR_SUPERUSER_PASSWORD')
+if not User.objects.filter(username=username).exists():
+	User.objects.create_superuser(username=username, email=email, password=password)
+	print('[entrypoint] simulator superuser created')
+else:
+	print('[entrypoint] simulator superuser already exists')
+PY
+fi
+
 # Aguardar o ThingsBoard estar acessível antes de renomear e iniciar telemetria
 echo "Aguardando ThingsBoard responder no endpoint /api/auth/login..."
-# hardcoded IP conforme convenção do projeto
-TB_URL="http://10.0.0.2:8080/api/auth/login"
+TB_BASE="${THINGSBOARD_HOST:-$TB_HOST_VALUE}"
+TB_BASE="${TB_BASE%/}"
+TB_URL="${TB_BASE}/api/auth/login"
+AUTH_PAYLOAD=$(printf '{"username":"%s","password":"%s"}' "${THINGSBOARD_USER:-$TB_USER_VALUE}" "${THINGSBOARD_PASSWORD:-$TB_PASSWORD_VALUE}")
 # Try briefly for ThingsBoard; if still unreachable, continue and let send_telemetry
 # do the active reconciliation/retry. This avoids simulators stuck forever when network
 # to TB is temporarily unavailable.
@@ -138,7 +164,7 @@ TMP_OUT=$(mktemp /tmp/tb_resp.XXXXXX 2>/dev/null || echo "/tmp/tb_resp_$$")
 TMP_ERR=$(mktemp /tmp/tb_err.XXXXXX 2>/dev/null || echo "/tmp/tb_err_$$")
 while true; do
 	# faz request e captura status + possíveis mensagens de erro
-	STATUS=$(curl -sS -o "$TMP_OUT" -w "%{http_code}" --connect-timeout 2 --max-time 5 -X POST "$TB_URL" -H 'Content-Type: application/json' -d '{"username":"tenant@thingsboard.org","password":"tenant"}' 2>"$TMP_ERR" || true)
+	STATUS=$(curl -sS -o "$TMP_OUT" -w "%{http_code}" --connect-timeout 2 --max-time 5 -X POST "$TB_URL" -H 'Content-Type: application/json' -d "$AUTH_PAYLOAD" 2>"$TMP_ERR" || true)
 	CURL_RC=$?
 	BODY=$(cat "$TMP_OUT" 2>/dev/null || echo "")
 	ERR_OUTPUT=$(cat "$TMP_ERR" 2>/dev/null || echo "")
@@ -204,7 +230,8 @@ if [ "${SIMULATOR_NUMBER:-1}" = "1" ]; then
 	# Use Django runserver as a lightweight HTTP server; redirect logs to /var/log/sim_http_8001.log
 	# POSIX-safe redirection and background handling (avoid bash-only &> and '& ||' syntax)
 	mkdir -p /var/log || true
-	python manage.py runserver 0.0.0.0:8001 >/var/log/sim_http_8001.log 2>&1 &
+	# --insecure serves static files even with DEBUG=False, useful for admin CSS
+	python manage.py runserver --insecure 0.0.0.0:8001 >/var/log/sim_http_8001.log 2>&1 &
 	RUNSV_PID=$!
 	# give it a moment to start and verify the process is alive
 	sleep 1
