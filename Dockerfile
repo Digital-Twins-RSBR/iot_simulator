@@ -14,10 +14,10 @@ RUN pip install --no-cache-dir -r requirements/base.txt
 # Copia o restante do código
 COPY . .
 
-# Expõe a porta se necessário (não obrigatório se só usar comandos internos)
-EXPOSE 8002
+# Expõe a porta HTTP usada pelo entrypoint quando SIMULATOR_NUMBER=1
+EXPOSE 8001
 
-ENV DJANGO_SETTINGS_MODULE=iot_simulator.settings
+ENV DJANGO_SETTINGS_MODULE=iot_simulator.settings_base
 
 # Comando padrão (pode ser sobrescrito)
 COPY entrypoint.sh /entrypoint.sh
