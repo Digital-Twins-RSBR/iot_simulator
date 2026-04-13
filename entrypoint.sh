@@ -128,6 +128,26 @@ python manage.py migrate --noinput
 echo "Coletando arquivos estáticos..."
 python manage.py collectstatic --noinput || true
 
+# Create Django superuser for simulator if env vars present
+if [ -n "$SIMULATOR_SUPERUSER_USERNAME" ] && [ -n "$SIMULATOR_SUPERUSER_PASSWORD" ]; then
+	echo "[entrypoint] Ensuring simulator Django superuser $SIMULATOR_SUPERUSER_USERNAME exists"
+	python - <<PY
+import os
+import django
+django.setup()
+from django.contrib.auth import get_user_model
+User = get_user_model()
+username = os.getenv('SIMULATOR_SUPERUSER_USERNAME')
+email = os.getenv('SIMULATOR_SUPERUSER_EMAIL', 'simulator@example.com')
+password = os.getenv('SIMULATOR_SUPERUSER_PASSWORD')
+if not User.objects.filter(username=username).exists():
+	User.objects.create_superuser(username=username, email=email, password=password)
+	print('[entrypoint] simulator superuser created')
+else:
+	print('[entrypoint] simulator superuser already exists')
+PY
+fi
+
 # Aguardar o ThingsBoard estar acessível antes de renomear e iniciar telemetria
 echo "Aguardando ThingsBoard responder no endpoint /api/auth/login..."
 TB_BASE="${THINGSBOARD_HOST:-$TB_HOST_VALUE}"
@@ -210,7 +230,8 @@ if [ "${SIMULATOR_NUMBER:-1}" = "1" ]; then
 	# Use Django runserver as a lightweight HTTP server; redirect logs to /var/log/sim_http_8001.log
 	# POSIX-safe redirection and background handling (avoid bash-only &> and '& ||' syntax)
 	mkdir -p /var/log || true
-	python manage.py runserver 0.0.0.0:8001 >/var/log/sim_http_8001.log 2>&1 &
+	# --insecure serves static files even with DEBUG=False, useful for admin CSS
+	python manage.py runserver --insecure 0.0.0.0:8001 >/var/log/sim_http_8001.log 2>&1 &
 	RUNSV_PID=$!
 	# give it a moment to start and verify the process is alive
 	sleep 1
