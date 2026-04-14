@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.core.exceptions import ValidationError
 import requests
 import json
 import time
@@ -98,6 +99,50 @@ DEVICE_RPC_METADATA = {
     }
 }
 
+
+class GatewayIOT(models.Model):
+    AUTH_METHOD_USER_PASSWORD = "user_password"
+    AUTH_METHOD_API_KEY = "api_key"
+    AUTH_METHOD_CHOICES = [
+        (AUTH_METHOD_USER_PASSWORD, "Usuario e senha"),
+        (AUTH_METHOD_API_KEY, "API Key"),
+    ]
+
+    name = models.CharField(max_length=100, unique=True)
+    base_url = models.URLField(help_text="Ex: http://thingsboard:8080")
+    mqtt_port = models.PositiveIntegerField(default=1883)
+    mqtt_keep_alive = models.PositiveIntegerField(default=60)
+    auth_method = models.CharField(max_length=32, choices=AUTH_METHOD_CHOICES, default=AUTH_METHOD_USER_PASSWORD)
+    username = models.CharField(max_length=255, blank=True, null=True)
+    password = models.CharField(max_length=255, blank=True, null=True)
+    api_key = models.CharField(max_length=512, blank=True, null=True)
+    is_active = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-is_active", "name"]
+
+    def __str__(self):
+        status = "active" if self.is_active else "inactive"
+        return f"{self.name} ({status})"
+
+    def clean(self):
+        if self.auth_method == self.AUTH_METHOD_USER_PASSWORD:
+            if not self.username or not self.password:
+                raise ValidationError("Usuario e senha sao obrigatorios para auth por login.")
+        elif self.auth_method == self.AUTH_METHOD_API_KEY:
+            if not self.api_key:
+                raise ValidationError("API Key e obrigatoria para auth por ApiKey.")
+        else:
+            raise ValidationError("Metodo de autenticacao invalido.")
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+        if self.is_active:
+            GatewayIOT.objects.filter(is_active=True).exclude(pk=self.pk).update(is_active=False)
+
 class DeviceType(models.Model):
     name = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True, null=True)
@@ -143,31 +188,16 @@ class Device(models.Model):
         is_new = self.pk is None
         super().save(*args, **kwargs)
         # Sempre tenta garantir thingsboard_id e token válidos
-        THINGSBOARD_HOST = settings.THINGSBOARD_HOST.rstrip('/')
-        THINGSBOARD_API_URL = f"{THINGSBOARD_HOST}/api"
-        TB_USER = getattr(settings, "THINGSBOARD_USER", None)
-        TB_PASSWORD = getattr(settings, "THINGSBOARD_PASSWORD", None)
-        if not TB_USER or not TB_PASSWORD:
-            print("THINGSBOARD_USER ou THINGSBOARD_PASSWORD não configurados no settings.")
-            return
+        from .thingsboard_gateway import get_active_gateway, get_gateway_connection, get_management_headers
 
-        # Autentica e obtém JWT
         try:
-            resp = requests.post(
-                f"{THINGSBOARD_API_URL}/auth/login",
-                json={"username": TB_USER, "password": TB_PASSWORD},
-                headers={"Content-Type": "application/json"}
-            )
-            resp.raise_for_status()
-            jwt_token = resp.json().get("token")
+            gateway = get_active_gateway(required=True)
+            connection = get_gateway_connection(gateway)
+            THINGSBOARD_API_URL = f"{connection.base_url}/api"
+            headers = get_management_headers(gateway=gateway)
         except Exception as e:
-            print(f"Erro ao autenticar no ThingsBoard: {e}")
+            print(f"GatewayIOT ativo nao configurado/valido: {e}")
             return
-
-        headers = {
-            "Content-Type": "application/json",
-            "X-Authorization": f"Bearer {jwt_token}"
-        }
 
         # Busca ou cria o device no ThingsBoard com tentativas e reconciliação
         from urllib.parse import quote_plus
@@ -207,6 +237,9 @@ class Device(models.Model):
             attempt += 1
             try:
                 resp = requests.get(url_search, headers=headers, timeout=6)
+                if resp.status_code == 401:
+                    headers = get_management_headers(gateway=gateway, force_refresh=True)
+                    resp = requests.get(url_search, headers=headers, timeout=6)
                 if resp.status_code == 200:
                     found_id = _extract_device_id_from_search(resp)
                     if found_id:
@@ -227,6 +260,9 @@ class Device(models.Model):
                 }
                 url_create = f"{THINGSBOARD_API_URL}/device"
                 resp = requests.post(url_create, headers=headers, data=json.dumps(payload), timeout=6)
+                if resp.status_code == 401:
+                    headers = get_management_headers(gateway=gateway, force_refresh=True)
+                    resp = requests.post(url_create, headers=headers, data=json.dumps(payload), timeout=6)
                 if resp.status_code in (200, 201):
                     # creation succeeded, extract id robustly
                     try:
@@ -298,6 +334,9 @@ class Device(models.Model):
         try:
             url_token = f"{THINGSBOARD_API_URL}/device/{tb_device_id}/credentials"
             resp = requests.get(url_token, headers=headers, timeout=5)
+            if resp.status_code == 401:
+                headers = get_management_headers(gateway=gateway, force_refresh=True)
+                resp = requests.get(url_token, headers=headers, timeout=5)
             if resp.status_code != 200:
                 # credentials endpoint did not return 200. Try to recover existing device by name and fetch credentials.
                 print(f"Credenciais indisponiveis (status {resp.status_code}) para {self.device_id}; tentando recuperar por nome...")
@@ -377,25 +416,13 @@ class Device(models.Model):
             elif self.unit:
                 label = self.unit.name
             try:
-                THINGSBOARD_HOST = settings.THINGSBOARD_HOST.rstrip('/')
-                THINGSBOARD_API_URL = f"{THINGSBOARD_HOST}/api"
-                TB_USER = getattr(settings, "THINGSBOARD_USER", None)
-                TB_PASSWORD = getattr(settings, "THINGSBOARD_PASSWORD", None)
-                # Autentica e obtém JWT
-                resp = requests.post(
-                    f"{THINGSBOARD_API_URL}/auth/login",
-                    json={"username": TB_USER, "password": TB_PASSWORD},
-                    headers={"Content-Type": "application/json"}
-                )
-                resp.raise_for_status()
-                jwt_token = resp.json().get("token")
-                headers = {
-                    "Content-Type": "application/json",
-                    "X-Authorization": f"Bearer {jwt_token}"
-                }
+                headers = get_management_headers(gateway=gateway)
                 # Recupera o device atual
                 url_get = f"{THINGSBOARD_API_URL}/device/{self.thingsboard_id}"
                 resp = requests.get(url_get, headers=headers)
+                if resp.status_code == 401:
+                    headers = get_management_headers(gateway=gateway, force_refresh=True)
+                    resp = requests.get(url_get, headers=headers)
                 resp.raise_for_status()
                 device_data = resp.json()
                 # Atualiza o campo label
@@ -414,25 +441,13 @@ class Device(models.Model):
             rpc_metadata = self.get_rpc_metadata()
             if rpc_metadata:
                 try:
-                    THINGSBOARD_HOST = settings.THINGSBOARD_HOST.rstrip('/')
-                    THINGSBOARD_API_URL = f"{THINGSBOARD_HOST}/api"
-                    TB_USER = getattr(settings, "THINGSBOARD_USER", None)
-                    TB_PASSWORD = getattr(settings, "THINGSBOARD_PASSWORD", None)
-                    # Autentica e obtém JWT
-                    resp = requests.post(
-                        f"{THINGSBOARD_API_URL}/auth/login",
-                        json={"username": TB_USER, "password": TB_PASSWORD},
-                        headers={"Content-Type": "application/json"}
-                    )
-                    resp.raise_for_status()
-                    jwt_token = resp.json().get("token")
-                    headers = {
-                        "Content-Type": "application/json",
-                        "X-Authorization": f"Bearer {jwt_token}"
-                    }
+                    headers = get_management_headers(gateway=gateway)
                     # Envia como atributo compartilhado (shared)
                     url_shared = f"{THINGSBOARD_API_URL}/plugins/telemetry/DEVICE/{self.thingsboard_id}/SHARED_SCOPE"
                     resp = requests.post(url_shared, headers=headers, json=rpc_metadata)
+                    if resp.status_code == 401:
+                        headers = get_management_headers(gateway=gateway, force_refresh=True)
+                        resp = requests.post(url_shared, headers=headers, json=rpc_metadata)
                     if resp.status_code in (200, 201):
                         print(f"Metadados RPC enviados como atributo compartilhado para o device {self.device_id}.")
                     else:

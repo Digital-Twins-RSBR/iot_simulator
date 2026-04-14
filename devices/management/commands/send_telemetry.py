@@ -11,21 +11,13 @@ from collections import defaultdict
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from devices.models import Device
-import re
+from devices.thingsboard_gateway import get_active_gateway, get_gateway_connection
 
 
-THINGSBOARD_HOST = settings.THINGSBOARD_HOST
-if THINGSBOARD_HOST.startswith("http://"):
-    THINGSBOARD_HOST = THINGSBOARD_HOST[len("http://"):]
-elif THINGSBOARD_HOST.startswith("https://"):
-    THINGSBOARD_HOST = THINGSBOARD_HOST[len("https://"):]
-# Remove porta se existir (ex: localhost:1883 -> localhost)
-THINGSBOARD_HOST = re.split(r':', THINGSBOARD_HOST)[0]
-
-
-THINGSBOARD_API_URL = f"https://{THINGSBOARD_HOST}/api"
-THINGSBOARD_MQTT_PORT = settings.THINGSBOARD_MQTT_PORT
-THINGSBOARD_MQTT_KEEP_ALIVE = settings.THINGSBOARD_MQTT_KEEP_ALIVE
+# Resolved in Command.handle() from the active GatewayIOT.
+THINGSBOARD_HOST = ""
+THINGSBOARD_MQTT_PORT = 1883
+THINGSBOARD_MQTT_KEEP_ALIVE = 60
 HEARTBEAT_INTERVAL = settings.HEARTBEAT_INTERVAL
 
 # INFLUX configuration
@@ -91,6 +83,20 @@ async def post_to_influx(session, data, device=None):
 
 
 DEVICE_STATE = defaultdict(dict)
+
+
+def configure_thingsboard_runtime():
+    global THINGSBOARD_HOST, THINGSBOARD_MQTT_PORT, THINGSBOARD_MQTT_KEEP_ALIVE
+
+    gateway = get_active_gateway(required=True)
+    connection = get_gateway_connection(gateway)
+    if not connection or not connection.mqtt_host:
+        raise RuntimeError("GatewayIOT ativo possui base_url invalida para MQTT.")
+
+    THINGSBOARD_HOST = connection.mqtt_host
+    THINGSBOARD_MQTT_PORT = connection.mqtt_port
+    THINGSBOARD_MQTT_KEEP_ALIVE = connection.mqtt_keep_alive
+    return gateway
 
 
 class InMemoryDeviceProxy:
@@ -876,6 +882,15 @@ class Command(BaseCommand):
         system_name = options.get('system')
         device_type = options.get('device_type')
         use_memory = options['memory']
+
+        try:
+            gateway = configure_thingsboard_runtime()
+            self.stdout.write(
+                f"Usando GatewayIOT ativo '{gateway.name}' em {gateway.base_url} (mqtt={THINGSBOARD_HOST}:{THINGSBOARD_MQTT_PORT})"
+            )
+        except Exception as exc:
+            self.stderr.write(f"GatewayIOT ativo invalido/ausente: {exc}")
+            return
 
         if device_ids:
             all_devices = Device.objects.filter(id__in=device_ids)

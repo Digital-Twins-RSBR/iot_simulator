@@ -4,7 +4,7 @@ set -e
 
 BASE_DIR="/iot_simulator"
 SRC_DB="$BASE_DIR/initial_data/db.sqlite3"
-TARGET_DB_CONF_PATH="$BASE_DIR/db.sqlite3"
+TARGET_DB_CONF_PATH="${SQLITE_DB_PATH:-$BASE_DIR/db.sqlite3}"
 
 echo "[restore_db.sh] preparando ambiente de restore"
 FORCE=0

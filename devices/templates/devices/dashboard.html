@@ -1,0 +1,107 @@
+{% extends 'admin/base_site.html' %}
+{% load static %}
+
+{% block extrahead %}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet">
+    <link rel="stylesheet" href="{% static 'devices/simulator-admin.css' %}">
+    {{ block.super }}
+{% endblock %}
+
+{% block content %}
+    <main class="sim-main"
+        data-status-url="{% url 'simulator-dashboard-status' %}"
+        data-start-url="{% url 'simulator-dashboard-start' %}"
+        data-stop-url="{% url 'simulator-dashboard-stop' %}"
+        data-check-gateway-url="{% url 'simulator-dashboard-check-gateway' %}"
+        data-logs-url="{% url 'simulator-dashboard-logs' %}">
+
+        <section class="hero-card">
+            <div>
+                <p class="eyebrow">Simulator Ops</p>
+                <h1>Controle de sync e gateway</h1>
+                <p class="hero-copy">Mesmo runtime para Dashboard e Admin: validar gateway, ligar/desligar sync e acompanhar logs em tempo real.</p>
+            </div>
+            <div class="hero-actions">
+                <button id="check-gateway-button" class="secondary-button">Verificar gateway</button>
+                <button id="start-button" class="primary-button">Ligar sync</button>
+                <button id="stop-button" class="secondary-button">Desligar sync</button>
+            </div>
+        </section>
+
+        <section class="chips-row">
+            <a class="chip-link" href="/admin/devices/gatewayiot/">Gateways IoT</a>
+            <a class="chip-link" href="/admin/devices/device/">Devices</a>
+            <a class="chip-link" href="/admin/devices/system/">Systems</a>
+            <a class="chip-link" href="/admin/devices/unit/">Units</a>
+            <a class="chip-link" href="/admin/devices/devicetype/">Device Types</a>
+            <a class="chip-link" href="/admin/">Django Admin</a>
+        </section>
+
+        <section class="stats-grid">
+            <article class="stat-card stat-card-highlight">
+                <p>Runtime</p>
+                <strong id="runtime-mode">{{ runtime.mode }}</strong>
+                <span id="runtime-summary">{% if runtime.is_running %}Processo de telemetria ativo{% else %}Sem processo ativo{% endif %}</span>
+            </article>
+            <article class="stat-card">
+                <p>Gateway ativo</p>
+                <strong id="gateway-name">{% if active_gateway %}{{ active_gateway.name }}{% else %}Nenhum{% endif %}</strong>
+                <span id="gateway-auth">{% if active_gateway %}{{ active_gateway.auth_method }}{% else %}—{% endif %}</span>
+            </article>
+            <article class="stat-card">
+                <p>Devices</p>
+                <strong id="devices-total">{{ stats.devices_total }}</strong>
+                <span><span id="devices-with-token">{{ stats.devices_with_token }}</span> com token</span>
+            </article>
+            <article class="stat-card">
+                <p>Gateways</p>
+                <strong id="gateways-total">{{ stats.gateways_total }}</strong>
+                <span><span id="gateways-active">{{ stats.gateways_active }}</span> ativos</span>
+            </article>
+        </section>
+
+        <section class="panel-grid">
+            <article class="panel-card">
+                <div class="panel-head">
+                    <h3>Estado do runtime</h3>
+                    <span class="pill" id="runtime-pill">{{ runtime.mode }}</span>
+                </div>
+                <dl class="runtime-details">
+                    <div>
+                        <dt>PID ativo</dt>
+                        <dd id="active-pid">{{ runtime.active_pid|default:'-' }}</dd>
+                    </div>
+                    <div>
+                        <dt>Modo</dt>
+                        <dd id="runtime-mode-detail">{{ runtime.mode }}</dd>
+                    </div>
+                    <div>
+                        <dt>Status gateway</dt>
+                        <dd id="gateway-check-result">Ainda não verificado</dd>
+                    </div>
+                </dl>
+                <div class="toggle-list">
+                    <label><input id="toggle-randomize" type="checkbox" {% if simulator_flags.randomize %}checked{% endif %}> Randomize</label>
+                    <label><input id="toggle-memory" type="checkbox" {% if simulator_flags.memory %}checked{% endif %}> Memory mode</label>
+                    <label><input id="toggle-influx" type="checkbox" {% if simulator_flags.use_influxdb %}checked{% endif %}> Influx logging</label>
+                </div>
+            </article>
+
+            <article class="panel-card">
+                <div class="panel-head">
+                    <h3>Logs</h3>
+                    <div class="logs-actions">
+                        <button id="refresh-logs" class="text-button">Atualizar</button>
+                        <span id="last-updated">—</span>
+                    </div>
+                </div>
+                <pre id="log-output" class="log-output">{% if recent_logs %}{% for line in recent_logs %}{{ line }}
+{% endfor %}{% else %}Sem logs do runtime gerenciado até o momento.{% endif %}</pre>
+            </article>
+        </section>
+    </main>
+    <script src="{% static 'devices/dashboard.js' %}"></script>
+{% endblock %}

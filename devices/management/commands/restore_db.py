@@ -60,5 +60,25 @@ class Command(BaseCommand):
                 pass
 
             self.stdout.write(self.style.SUCCESS(f'Restored DB from {src_path} to {db_path}'))
+            # Ensure a known default superuser exists after restore to avoid accidental lockout
+            try:
+                from django.contrib.auth import get_user_model
+                User = get_user_model()
+                su_name = os.getenv('SIMULATOR_SUPERUSER_USERNAME', 'middts')
+                su_email = os.getenv('SIMULATOR_SUPERUSER_EMAIL', 'admin@example.com')
+                su_pass = os.getenv('SIMULATOR_SUPERUSER_PASSWORD', 'middts123')
+                u, created = User.objects.get_or_create(username=su_name, defaults={'email': su_email})
+                u.email = su_email
+                u.is_staff = True
+                u.is_superuser = True
+                u.set_password(su_pass)
+                u.save()
+                if created:
+                    self.stdout.write(self.style.SUCCESS(f'Created superuser {su_name}'))
+                else:
+                    self.stdout.write(self.style.SUCCESS(f'Updated superuser {su_name} (password/flags applied)'))
+            except Exception as e:
+                # Don't fail the restore for issues setting user; just log
+                self.stdout.write(self.style.WARNING(f'Could not ensure superuser after restore: {e}'))
         except Exception as e:
             raise CommandError(f'Failed to restore DB: {e}')

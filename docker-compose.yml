@@ -8,9 +8,21 @@ services:
     container_name: iot_simulator
     restart: unless-stopped
     environment:
-      # - DEVICE_ID=${DEVICE_ID}
-      # - DEVICE_NAME=${DEVICE_NAME}
-      - THINGSBOARD_HOST=${THINGSBOARD_HOST}
+      # DEVICE_ID: ${DEVICE_ID}
+      # DEVICE_NAME: ${DEVICE_NAME}
+      THINGSBOARD_HOST: ${THINGSBOARD_HOST}
+      SIMULATOR_AUTO_START: ${SIMULATOR_AUTO_START:-1}
+      SQLITE_DB_PATH: /data/db.sqlite3
+      SIMULATOR_SEED_DB_ON_FIRST_BOOT: ${SIMULATOR_SEED_DB_ON_FIRST_BOOT:-1}
+      SIMULATOR_RESTORE_DB_ON_BOOT: ${SIMULATOR_RESTORE_DB_ON_BOOT:-0}
+      RESET_SIM_DB: ${RESET_SIM_DB:-0}
+      ALLOWED_HOSTS: "*"
+    volumes:
+      - simulator_data:/data
     # command: ["python", "manage.py", "send_telemetry"]
-    # ports:
-      # - "8002:8002"  # apenas se necessário para debug
+    ports:
+      - "18001:8001"  # expose admin/dashboard on host:18001 for convenience
+      - "8001:8001"   # also expose same port on host:8001 for external access
+
+volumes:
+  simulator_data:

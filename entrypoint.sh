@@ -90,7 +90,7 @@ fi
 
 # Se não houver POSTGRES_HOST, usa sqlite e restaura DB
 if [ -z "${POSTGRES_HOST:-}" ]; then
-	DBFILE="/iot_simulator/db.sqlite3"
+	DBFILE="${SQLITE_DB_PATH:-/iot_simulator/db.sqlite3}"
 	DBDIR="$(dirname "$DBFILE")"
 	mkdir -p "$DBDIR" || true
 	if [ ! -f "$DBFILE" ]; then
@@ -101,16 +101,19 @@ if [ -z "${POSTGRES_HOST:-}" ]; then
 	chmod 777 "$DBDIR" || true
 	echo "[entrypoint] Usando sqlite3 local: $DBFILE (perms ajustadas)"
 	if [ -x "/iot_simulator/restore_db.sh" ]; then
-		echo "[entrypoint] Found restore_db.sh -> running restore helper"
-		# If we already restored recently, skip restore unless RESET_SIM_DB is explicitly set
-		if [ -f "/iot_simulator/.last_restore" ] && [ "${RESET_SIM_DB:-0}" != "1" ]; then
-			echo "[entrypoint] .last_restore found -> skipping restore (to force restore set RESET_SIM_DB=1)"
+		SEED_ON_FIRST_BOOT="${SIMULATOR_SEED_DB_ON_FIRST_BOOT:-1}"
+		RESTORE_ON_BOOT="${SIMULATOR_RESTORE_DB_ON_BOOT:-0}"
+		if [ "${RESET_SIM_DB:-0}" = "1" ]; then
+			echo "[entrypoint] RESET_SIM_DB=1 -> restoring DB with force reset"
+			/bin/sh /iot_simulator/restore_db.sh --force-reset || echo "[entrypoint] restore_db.sh failed (continuing)"
+		elif [ ! -s "$DBFILE" ] && [ "$SEED_ON_FIRST_BOOT" = "1" ]; then
+			echo "[entrypoint] DB vazio na primeira inicializacao -> realizando seed inicial"
+			/bin/sh /iot_simulator/restore_db.sh || echo "[entrypoint] restore_db.sh failed (continuing)"
+		elif [ "$RESTORE_ON_BOOT" = "1" ]; then
+			echo "[entrypoint] SIMULATOR_RESTORE_DB_ON_BOOT=1 -> restaurando DB no boot"
+			/bin/sh /iot_simulator/restore_db.sh || echo "[entrypoint] restore_db.sh failed (continuing)"
 		else
-			if [ "${RESET_SIM_DB:-0}" = "1" ]; then
-				/bin/sh /iot_simulator/restore_db.sh --force-reset || echo "[entrypoint] restore_db.sh failed (continuing)"
-			else
-				/bin/sh /iot_simulator/restore_db.sh || echo "[entrypoint] restore_db.sh failed (continuing)"
-			fi
+			echo "[entrypoint] Restore automatico desabilitado; mantendo DB existente"
 		fi
 	fi
 else
@@ -122,15 +125,17 @@ if [ -f "/iot_simulator/.env" ]; then
 	export $(grep '^THINGSBOARD_' /iot_simulator/.env | xargs) || true
 fi
 
+SIMULATOR_AUTO_START="${SIMULATOR_AUTO_START:-1}"
+
 echo "Aplicando migrações..."
 python manage.py migrate --noinput
 
 echo "Coletando arquivos estáticos..."
 python manage.py collectstatic --noinput || true
 
-# Create Django superuser for simulator if env vars present
+# Ensure Django superuser for simulator exists and is configured
 if [ -n "$SIMULATOR_SUPERUSER_USERNAME" ] && [ -n "$SIMULATOR_SUPERUSER_PASSWORD" ]; then
-	echo "[entrypoint] Ensuring simulator Django superuser $SIMULATOR_SUPERUSER_USERNAME exists"
+	echo "[entrypoint] Ensuring simulator Django superuser $SIMULATOR_SUPERUSER_USERNAME exists and is configured"
 	python - <<PY
 import os
 import django
@@ -140,58 +145,67 @@ User = get_user_model()
 username = os.getenv('SIMULATOR_SUPERUSER_USERNAME')
 email = os.getenv('SIMULATOR_SUPERUSER_EMAIL', 'simulator@example.com')
 password = os.getenv('SIMULATOR_SUPERUSER_PASSWORD')
-if not User.objects.filter(username=username).exists():
-	User.objects.create_superuser(username=username, email=email, password=password)
+u, created = User.objects.get_or_create(username=username, defaults={'email': email})
+u.email = email
+u.is_staff = True
+u.is_superuser = True
+u.set_password(password)
+u.save()
+if created:
 	print('[entrypoint] simulator superuser created')
 else:
-	print('[entrypoint] simulator superuser already exists')
+	print('[entrypoint] simulator superuser updated (password/flags applied)')
 PY
 fi
 
-# Aguardar o ThingsBoard estar acessível antes de renomear e iniciar telemetria
-echo "Aguardando ThingsBoard responder no endpoint /api/auth/login..."
-TB_BASE="${THINGSBOARD_HOST:-$TB_HOST_VALUE}"
-TB_BASE="${TB_BASE%/}"
-TB_URL="${TB_BASE}/api/auth/login"
-AUTH_PAYLOAD=$(printf '{"username":"%s","password":"%s"}' "${THINGSBOARD_USER:-$TB_USER_VALUE}" "${THINGSBOARD_PASSWORD:-$TB_PASSWORD_VALUE}")
-# Try briefly for ThingsBoard; if still unreachable, continue and let send_telemetry
-# do the active reconciliation/retry. This avoids simulators stuck forever when network
-# to TB is temporarily unavailable.
-MAX_WAIT=30
-WAITED=0
-# arquivos temporários para resposta/erro do curl
-TMP_OUT=$(mktemp /tmp/tb_resp.XXXXXX 2>/dev/null || echo "/tmp/tb_resp_$$")
-TMP_ERR=$(mktemp /tmp/tb_err.XXXXXX 2>/dev/null || echo "/tmp/tb_err_$$")
-while true; do
-	# faz request e captura status + possíveis mensagens de erro
-	STATUS=$(curl -sS -o "$TMP_OUT" -w "%{http_code}" --connect-timeout 2 --max-time 5 -X POST "$TB_URL" -H 'Content-Type: application/json' -d "$AUTH_PAYLOAD" 2>"$TMP_ERR" || true)
-	CURL_RC=$?
-	BODY=$(cat "$TMP_OUT" 2>/dev/null || echo "")
-	ERR_OUTPUT=$(cat "$TMP_ERR" 2>/dev/null || echo "")
-	# Log resumido com amostra do corpo para depuração (máx 200 chars)
-	echo "[entrypoint][wait-for] curl_rc=$CURL_RC http_status=$STATUS body_sample='$(printf "%.200s" "$BODY")' stderr_sample='$(printf "%.200s" "$ERR_OUTPUT")'"
+# Aguardar o ThingsBoard apenas quando a telemetria sobe automaticamente.
+if [ "$SIMULATOR_AUTO_START" = "0" ]; then
+	echo "[entrypoint] SIMULATOR_AUTO_START=0 -> pulando espera ativa pelo ThingsBoard para liberar a dashboard imediatamente"
+else
+	echo "Aguardando ThingsBoard responder no endpoint /api/auth/login..."
+	TB_BASE="${THINGSBOARD_HOST:-$TB_HOST_VALUE}"
+	TB_BASE="${TB_BASE%/}"
+	TB_URL="${TB_BASE}/api/auth/login"
+	AUTH_PAYLOAD=$(printf '{"username":"%s","password":"%s"}' "${THINGSBOARD_USER:-$TB_USER_VALUE}" "${THINGSBOARD_PASSWORD:-$TB_PASSWORD_VALUE}")
+	# Try briefly for ThingsBoard; if still unreachable, continue and let send_telemetry
+	# do the active reconciliation/retry. This avoids simulators stuck forever when network
+	# to TB is temporarily unavailable.
+	MAX_WAIT=30
+	WAITED=0
+	# arquivos temporários para resposta/erro do curl
+	TMP_OUT=$(mktemp /tmp/tb_resp.XXXXXX 2>/dev/null || echo "/tmp/tb_resp_$$")
+	TMP_ERR=$(mktemp /tmp/tb_err.XXXXXX 2>/dev/null || echo "/tmp/tb_err_$$")
+	while true; do
+		# faz request e captura status + possíveis mensagens de erro
+		STATUS=$(curl -sS -o "$TMP_OUT" -w "%{http_code}" --connect-timeout 2 --max-time 5 -X POST "$TB_URL" -H 'Content-Type: application/json' -d "$AUTH_PAYLOAD" 2>"$TMP_ERR" || true)
+		CURL_RC=$?
+		BODY=$(cat "$TMP_OUT" 2>/dev/null || echo "")
+		ERR_OUTPUT=$(cat "$TMP_ERR" 2>/dev/null || echo "")
+		# Log resumido com amostra do corpo para depuração (máx 200 chars)
+		echo "[entrypoint][wait-for] curl_rc=$CURL_RC http_status=$STATUS body_sample='$(printf "%.200s" "$BODY")' stderr_sample='$(printf "%.200s" "$ERR_OUTPUT")'"
 
-	if [ "$STATUS" = "200" ] || [ "$STATUS" = "400" ] || [ "$STATUS" = "401" ]; then
-		echo "[entrypoint] ThingsBoard respondeu em $TB_URL (HTTP $STATUS). Corpo: $(printf "%.200s" "$BODY")"
-		break
-	else
-		echo "[entrypoint][wait-for] Ainda sem resposta do ThingsBoard (HTTP $STATUS). Aguarda 3s... ($WAITED/$MAX_WAIT s)"
-		if [ $CURL_RC -ne 0 ]; then
-			echo "[entrypoint][wait-for][curl-error] rc=$CURL_RC stderr='$(printf "%.200s" "$ERR_OUTPUT")'"
-		fi
-		sleep 3
-		WAITED=$((WAITED+3))
-		if [ $WAITED -ge $MAX_WAIT ]; then
-			echo "[entrypoint][ERRO] ThingsBoard não respondeu após $MAX_WAIT segundos. Último http_status=$STATUS; mostrando saída de debug:" 
-			echo "--- stderr ---"
-			cat "$TMP_ERR" 2>/dev/null || true
-			echo "--- body ---"
-			cat "$TMP_OUT" 2>/dev/null || true
+		if [ "$STATUS" = "200" ] || [ "$STATUS" = "400" ] || [ "$STATUS" = "401" ]; then
+			echo "[entrypoint] ThingsBoard respondeu em $TB_URL (HTTP $STATUS). Corpo: $(printf "%.200s" "$BODY")"
 			break
+		else
+			echo "[entrypoint][wait-for] Ainda sem resposta do ThingsBoard (HTTP $STATUS). Aguarda 3s... ($WAITED/$MAX_WAIT s)"
+			if [ $CURL_RC -ne 0 ]; then
+				echo "[entrypoint][wait-for][curl-error] rc=$CURL_RC stderr='$(printf "%.200s" "$ERR_OUTPUT")'"
+			fi
+			sleep 3
+			WAITED=$((WAITED+3))
+			if [ $WAITED -ge $MAX_WAIT ]; then
+				echo "[entrypoint][ERRO] ThingsBoard não respondeu após $MAX_WAIT segundos. Último http_status=$STATUS; mostrando saída de debug:"
+				echo "--- stderr ---"
+				cat "$TMP_ERR" 2>/dev/null || true
+				echo "--- body ---"
+				cat "$TMP_OUT" 2>/dev/null || true
+				break
+			fi
 		fi
-	fi
-done
-rm -f "$TMP_OUT" "$TMP_ERR" >/dev/null 2>&1 || true
+	done
+	rm -f "$TMP_OUT" "$TMP_ERR" >/dev/null 2>&1 || true
+fi
 
 # Determina número do simulador (env ou arg)
 SIMULATOR_NUMBER="${SIMULATOR_NUMBER:-1}"
@@ -241,5 +255,17 @@ if [ "${SIMULATOR_NUMBER:-1}" = "1" ]; then
 		echo "[entrypoint] HTTP server started (pid $RUNSV_PID)"
 	fi
 fi
+if [ "$SIMULATOR_AUTO_START" = "0" ]; then
+	echo "[entrypoint] SIMULATOR_AUTO_START=0 -> runtime de telemetria ficará sob controle do dashboard"
+	tail -f /dev/null
+fi
+
 echo "Iniciando simulador: enviando telemetria (send_telemetry)..."
-exec python manage.py send_telemetry ${USE_INFLUX_FLAG} ${RANDOMIZE_FLAG} ${MEMORY_FLAG}
+# Ensure runtime dir and logfile exist so dashboard can read logs even when entrypoint
+# starts the telemetry process directly (auto-start case).
+RUNTIME_DIR="/iot_simulator/runtime"
+LOG_FILE="$RUNTIME_DIR/send_telemetry.log"
+mkdir -p "$RUNTIME_DIR" || true
+touch "$LOG_FILE" || true
+chmod 666 "$LOG_FILE" || true
+exec python manage.py send_telemetry ${USE_INFLUX_FLAG} ${RANDOMIZE_FLAG} ${MEMORY_FLAG} >>"$LOG_FILE" 2>&1

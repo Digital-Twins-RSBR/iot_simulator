@@ -1,0 +1,44 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block extrahead %}
+    {{ block.super }}
+{% endblock %}
+
+{% block branding %}
+  <h1 id="site-name"><a href="{% url 'admin:index' %}">{{ site_header|default:_('Django administration') }}</a></h1>
+{% endblock %}
+
+{% block nav-global %}
+  {{ block.super }}
+  <div class="dashboard-link">
+    <a class="ghost-link" href="/dashboard/">Dashboard</a>
+  </div>
+  <script>
+    // Ensure any logout anchors perform a POST with CSRF (fallback for clients)
+    (function(){
+      function getCsrf(){
+        const name = 'csrftoken_iot_simulator=';
+        const c = document.cookie.split('; ').find(r => r.startsWith(name));
+        return c ? decodeURIComponent(c.split('=')[1]) : '';
+      }
+      document.addEventListener('click', function(e){
+        const a = e.target.closest('a');
+        if(!a) return;
+        if(a.getAttribute('href') === '/admin/logout/'){
+          e.preventDefault();
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = '/admin/logout/';
+          const csrf = document.createElement('input');
+          csrf.type = 'hidden';
+          csrf.name = 'csrfmiddlewaretoken';
+          csrf.value = getCsrf();
+          form.appendChild(csrf);
+          document.body.appendChild(form);
+          form.submit();
+        }
+      }, false);
+    })();
+  </script>
+{% endblock %}

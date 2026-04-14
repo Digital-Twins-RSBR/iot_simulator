@@ -89,10 +89,11 @@ if os.getenv('POSTGRES_HOST') or os.getenv('POSTGRES_DB'):
         }
     }
 else:
+    sqlite_path = os.getenv('SQLITE_DB_PATH', os.path.join(BASE_DIR, 'db.sqlite3'))
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),
+            'NAME': sqlite_path,
         }
     }
 
@@ -136,6 +137,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 SESSION_COOKIE_NAME = 'sessionid_iot_simulator'
 CSRF_COOKIE_NAME = 'csrftoken_iot_simulator'
+LOGIN_REDIRECT_URL = '/dashboard/'
+LOGOUT_REDIRECT_URL = '/admin/login/'
 
 INFLUXDB_HOST = os.getenv('INFLUXDB_HOST', 'localhost')
 INFLUXDB_PORT = int(os.getenv('INFLUXDB_PORT', '8086'))
@@ -162,3 +165,5 @@ if URLLC_MODE:
     print(f"[URLLC] Optimized settings applied: heartbeat={HEARTBEAT_INTERVAL}s, mqtt_timeout={URLLC_MQTT_TIMEOUT}s")
 
 ALLOW_THINGSBOARD_DELETE = os.getenv('ALLOW_THINGSBOARD_DELETE', 'True').lower() in ('1', 'true', 'yes')
+SIMULATOR_RANDOMIZE_DEFAULT = os.getenv('SIMULATOR_RANDOMIZE_DEFAULT', 'True').lower() in ('1', 'true', 'yes', 'on')
+SIMULATOR_MEMORY_DEFAULT = os.getenv('SIMULATOR_MEMORY_DEFAULT', 'True').lower() in ('1', 'true', 'yes', 'on')

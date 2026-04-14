@@ -1,0 +1,274 @@
+:root {
+    --bg: #f5f7fb;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --panel: #ffffff;
+    --line: #e5e7eb;
+    --primary: #0f766e;
+    --primary-strong: #115e59;
+    --accent: #0ea5e9;
+    --danger: #b91c1c;
+    --shadow: 0 12px 36px rgba(15, 23, 42, 0.08);
+}
+
+body {
+    background: radial-gradient(circle at top right, #e2f3ff 0%, #f5f7fb 45%);
+    color: var(--text);
+    font-family: 'Space Grotesk', sans-serif;
+}
+
+#container {
+    background: transparent;
+}
+
+.sim-main {
+    max-width: 1200px;
+    margin: 24px auto;
+    padding: 0 20px 32px;
+    display: grid;
+    gap: 16px;
+}
+
+.hero-card,
+.panel-card,
+.stat-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+}
+
+.hero-card {
+    padding: 24px;
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+    align-items: flex-start;
+}
+
+.hero-card h1 {
+    margin: 0 0 8px;
+    font-size: 28px;
+}
+
+.hero-copy {
+    margin: 0;
+    color: var(--muted);
+}
+
+.eyebrow {
+    margin: 0 0 6px;
+    color: var(--accent);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.hero-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.primary-button,
+.secondary-button,
+.text-button {
+    font: inherit;
+    border-radius: 10px;
+    padding: 10px 14px;
+    cursor: pointer;
+    border: 1px solid transparent;
+}
+
+.primary-button {
+    color: #fff;
+    background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+}
+
+.secondary-button {
+    color: var(--text);
+    background: #f9fafb;
+    border-color: var(--line);
+}
+
+.text-button {
+    background: transparent;
+    color: var(--muted);
+}
+
+.chips-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.chip-link {
+    text-decoration: none;
+    font-size: 13px;
+    color: #334155;
+    background: #eef2ff;
+    border: 1px solid #dbeafe;
+    border-radius: 999px;
+    padding: 7px 12px;
+}
+
+.stats-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.stat-card {
+    padding: 16px;
+}
+
+.stat-card p {
+    margin: 0;
+    color: var(--muted);
+}
+
+.stat-card strong {
+    margin-top: 6px;
+    display: block;
+    font-size: 27px;
+    line-height: 1.2;
+}
+
+.stat-card span {
+    font-size: 13px;
+    color: var(--muted);
+}
+
+.stat-card-highlight {
+    background: linear-gradient(135deg, #ecfeff, #eff6ff);
+    border-color: #bfdbfe;
+}
+
+.panel-grid {
+    display: grid;
+    grid-template-columns: 360px 1fr;
+    gap: 12px;
+}
+
+.panel-card {
+    padding: 18px;
+}
+
+.panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+}
+
+.panel-head h3 {
+    margin: 0;
+}
+
+.logs-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.pill {
+    border-radius: 999px;
+    background: #f3f4f6;
+    color: #334155;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 5px 10px;
+}
+
+.pill-running {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.runtime-details {
+    margin: 0;
+    display: grid;
+    gap: 10px;
+}
+
+.runtime-details div {
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 10px;
+}
+
+.runtime-details dt {
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.runtime-details dd {
+    margin: 2px 0 0;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+}
+
+.toggle-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 14px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.log-output {
+    margin: 0;
+    background: #0f172a;
+    color: #cbd5e1;
+    border-radius: 12px;
+    border: 1px solid #1e293b;
+    min-height: 360px;
+    max-height: 58vh;
+    overflow: auto;
+    padding: 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    font-family: 'IBM Plex Mono', monospace;
+    white-space: pre-wrap;
+}
+
+.loading {
+    opacity: 0.72;
+    pointer-events: none;
+}
+
+@media (max-width: 1100px) {
+    .stats-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .panel-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 700px) {
+    .sim-main {
+        padding: 0 12px 24px;
+    }
+
+    .hero-card {
+        flex-direction: column;
+    }
+
+    .hero-actions {
+        width: 100%;
+    }
+
+    .hero-actions button {
+        flex: 1;
+        min-width: 130px;
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+}

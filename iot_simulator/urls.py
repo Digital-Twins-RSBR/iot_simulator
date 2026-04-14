@@ -22,5 +22,6 @@ from devices.views import index
 urlpatterns = [
     path('', index, name='index'),
     path('admin/', admin.site.urls),
-     path('devices/', include('devices.urls')),
+    path('', include('devices.urls')),
+    path('devices/', include('devices.urls')),
 ]
