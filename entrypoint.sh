@@ -268,4 +268,29 @@ LOG_FILE="$RUNTIME_DIR/send_telemetry.log"
 mkdir -p "$RUNTIME_DIR" || true
 touch "$LOG_FILE" || true
 chmod 666 "$LOG_FILE" || true
-exec python manage.py send_telemetry ${USE_INFLUX_FLAG} ${RANDOMIZE_FLAG} ${MEMORY_FLAG} >>"$LOG_FILE" 2>&1
+
+cleanup() {
+	if [ -n "${SENDER_PID:-}" ] && kill -0 "$SENDER_PID" 2>/dev/null; then
+		kill "$SENDER_PID" 2>/dev/null || true
+		wait "$SENDER_PID" 2>/dev/null || true
+	fi
+	if [ -n "${RUNSV_PID:-}" ] && kill -0 "$RUNSV_PID" 2>/dev/null; then
+		kill "$RUNSV_PID" 2>/dev/null || true
+		wait "$RUNSV_PID" 2>/dev/null || true
+	fi
+	exit 0
+}
+
+trap cleanup TERM INT
+
+while true; do
+	python manage.py send_telemetry ${USE_INFLUX_FLAG} ${RANDOMIZE_FLAG} ${MEMORY_FLAG} >>"$LOG_FILE" 2>&1 &
+	SENDER_PID=$!
+	set +e
+	wait "$SENDER_PID"
+	SENDER_EXIT_CODE=$?
+	set -e
+	SENDER_PID=""
+	echo "[entrypoint][WARN] send_telemetry encerrou com codigo $SENDER_EXIT_CODE; nova tentativa em 10s" | tee -a "$LOG_FILE"
+	sleep 10
+done
